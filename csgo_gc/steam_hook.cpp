@@ -6,6 +6,7 @@
 #include "game_profile.h"
 #include "gc_active.h"
 #include "platform.h"
+#include "rcon_server.h"
 #include <funchook.h>
 
 #ifdef _WIN32
@@ -145,6 +146,7 @@ public:
 // client connect/disconnect notifications
 static GCWrapper<ActiveClientGC, ActiveNetworkingClient> *s_clientGC;
 static GCWrapper<ActiveServerGC, ActiveNetworkingServer> *s_serverGC;
+static RconServer s_rconServer;
 
 struct PlayerInfo
 {
@@ -560,6 +562,7 @@ public:
             assert(!s_clientGC);
             s_clientGC = new GCWrapper<ActiveClientGC, ActiveNetworkingClient>{ SteamNetworkingMessages(), steamId };
             Platform::Print("csgo_gc: ClientGC created for steamId=%llu\n", (unsigned long long)steamId);
+            s_rconServer.RegisterClient(&s_clientGC->m_gc);
         }
     }
 
@@ -575,6 +578,7 @@ public:
         else
         {
             assert(s_clientGC);
+            s_rconServer.UnregisterClient(&s_clientGC->m_gc);
             delete s_clientGC;
             s_clientGC = nullptr;
         }
@@ -2742,6 +2746,49 @@ static void HookCreate(const char *name, void *target, void *hook, void **bridge
 
 static bool InitializeSteamAPI(bool dedicated)
 {
+#ifdef _WIN32
+    // CS2 build 14193's steam_api64.dll no longer exports the legacy
+    // SteamAPI_Init / SteamInternal_GameServer_Init symbols. Importing them
+    // statically makes the whole DLL fail to load ("entry point not found"),
+    // so resolve them at runtime and fall back to the current equivalents.
+    HMODULE steamApi = GetModuleHandleW(L"steam_api64.dll");
+    if (!steamApi)
+        steamApi = GetModuleHandleW(L"steam_api.dll");
+    if (!steamApi)
+        Platform::Error("steam_api64.dll not loaded");
+
+    if (dedicated)
+    {
+        typedef bool(S_CALLTYPE * GameServerInitV2Fn)(uint32, uint16, uint16, EServerMode, const char *, const char *);
+        typedef bool(S_CALLTYPE * GameServerInitFn)(uint32, uint16, uint16, uint16, EServerMode, const char *);
+
+        auto initV2 = reinterpret_cast<GameServerInitV2Fn>(GetProcAddress(steamApi, "SteamInternal_GameServer_Init_V2"));
+        if (initV2)
+        {
+            return initV2(0, 0, STEAMGAMESERVER_QUERY_PORT_SHARED, eServerModeNoAuthentication, "1.38.7.9", nullptr);
+        }
+
+        auto init = reinterpret_cast<GameServerInitFn>(GetProcAddress(steamApi, "SteamInternal_GameServer_Init"));
+        if (init)
+        {
+            return init(0, 0, 0, STEAMGAMESERVER_QUERY_PORT_SHARED, eServerModeNoAuthentication, "1.38.7.9");
+        }
+
+        Platform::Error("steam_api64.dll has no GameServer_Init export");
+    }
+    else
+    {
+        typedef bool(S_CALLTYPE * SteamAPIInitFn)();
+
+        auto init = reinterpret_cast<SteamAPIInitFn>(GetProcAddress(steamApi, "SteamAPI_Init"));
+        if (!init)
+            init = reinterpret_cast<SteamAPIInitFn>(GetProcAddress(steamApi, "SteamAPI_InitSafe"));
+        if (!init)
+            Platform::Error("steam_api64.dll has no SteamAPI_Init export");
+
+        return init();
+    }
+#else
     if (dedicated)
     {
         return SteamGameServer_Init(0, 0, STEAMGAMESERVER_QUERY_PORT_SHARED, eServerModeNoAuthentication, "1.38.7.9");
@@ -2750,6 +2797,7 @@ static bool InitializeSteamAPI(bool dedicated)
     {
         return SteamAPI_Init();
     }
+#endif
 }
 
 static bool s_steamClientHooksInstalled = false;
@@ -3108,6 +3156,10 @@ void SteamHookPreInstall(bool dedicated)
 
     Platform::Print("csgo_gc: registered steamclient load notification\n");
 #endif // _WIN32
+
+    // RCON is a client-inventory feature; dedicated servers have no ClientGC.
+    if (!dedicated)
+        s_rconServer.Start();
 }
 
 #ifdef _WIN32
@@ -3197,4 +3249,7 @@ void SteamHookInstall(bool dedicated)
         EagerlyConnectClientGC();
     }
 #endif
+
+    if (!dedicated)
+        s_rconServer.Start();
 }

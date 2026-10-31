@@ -49,6 +49,17 @@
 //	"2"	"1114"
 //}
 
+// GC-side RCON (inventory administration only; it does not talk to the game server)
+// keep bind_address on loopback: the password is sent in plaintext over TCP
+"rcon"
+{
+	"enabled"	"0"
+	"bind_address"	"127.0.0.1"
+	"port"	"37016"
+	// empty accepts any password
+	"password"	""
+}
+
 // steam related options
 
 // which game to target: "csgo" (default) or "cs2"

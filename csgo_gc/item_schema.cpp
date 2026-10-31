@@ -137,6 +137,11 @@ ItemSchema::ItemSchema()
         { 168, AttributeType::Uint32 }, // quest id
         { 232, AttributeType::Uint32 }, // sprays remaining
         { 233, AttributeType::Uint32 }, // spray tint id
+        { 137, AttributeType::Uint32 }, // tournament event id
+        { 138, AttributeType::Uint32 }, // tournament event stage id
+        { 139, AttributeType::Uint32 }, // tournament team 0 id
+        { 140, AttributeType::Uint32 }, // tournament team 1 id
+        { 223, AttributeType::Uint32 }, // tournament MVP account id
         { 270, AttributeType::Uint32 }, // casket items count
         { 271, AttributeType::Uint32 }, // casket modification date
         { 272, AttributeType::Uint32 }, // casket id low
@@ -148,9 +153,12 @@ ItemSchema::ItemSchema()
     // Try the canonical path (relative to game/bin/win64/) first, then one level up.
     KeyValue itemSchema{ "root" };
     if (!itemSchema.ParseFromFile("csgo/scripts/items/items_game.txt") &&
-        !itemSchema.ParseFromFile("../../csgo/scripts/items/items_game.txt"))
+        !itemSchema.ParseFromFile("../../csgo/scripts/items/items_game.txt") &&
+        !itemSchema.ParseFromFile("../../csgo_gc/items_game.txt") &&
+        !itemSchema.ParseFromFile("csgo_gc/items_game.txt"))
     {
-        Platform::Print("csgo_gc: items_game.txt not found, using hardcoded attribute types only\n");
+        Platform::Print("csgo_gc: items_game.txt not found, using hardcoded attribute types only "
+                        "(extract it from pak01_*.vpk to csgo_gc/items_game.txt)\n");
         return;
     }
 
@@ -1223,6 +1231,32 @@ PaintKitInfo *ItemSchema::PaintKitInfoByName(std::string_view name)
 const PaintKitInfo *ItemSchema::PaintKitInfoByDefIndex(uint32_t defIndex) const
 {
     for (const auto &pair : m_paintKitInfo)
+    {
+        if (pair.second.m_defIndex == defIndex)
+        {
+            return &pair.second;
+        }
+    }
+
+    return nullptr;
+}
+
+const StickerKitInfo *ItemSchema::StickerKitInfoByDefIndex(uint32_t defIndex) const
+{
+    for (const auto &pair : m_stickerKitInfo)
+    {
+        if (pair.second.m_defIndex == defIndex)
+        {
+            return &pair.second;
+        }
+    }
+
+    return nullptr;
+}
+
+const MusicDefinitionInfo *ItemSchema::MusicDefinitionInfoByDefIndex(uint32_t defIndex) const
+{
+    for (const auto &pair : m_musicDefinitionInfo)
     {
         if (pair.second.m_defIndex == defIndex)
         {

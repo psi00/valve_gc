@@ -1,2 +1,9 @@
 /*build*/
 /.idea
+
+# local build output
+/release
+
+# local-only test harness and notes, kept outside the repo
+/scripts
+/.working

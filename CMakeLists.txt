@@ -4,6 +4,9 @@ project(csgo_gc)
 
 set(CMAKE_CXX_STANDARD 20)
 
+include(CTest)
+find_package(Threads REQUIRED)
+
 if (CMAKE_SIZEOF_VOID_P EQUAL 4)
     set(IS_32BIT ON)
 endif()

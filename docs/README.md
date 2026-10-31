@@ -353,12 +353,16 @@ loadout changes **persist** across restarts.
 
 ### 9.4 Item schema (`item_schema.cpp`)
 
-Loads `csgo/scripts/items/items_game.txt` and indexes items (with prefab inheritance),
-attributes, sticker kits, paint kits (+ rarities), music definitions, item sets, and the
-revolving/unusual/client **loot lists** used by case opening. `CreateItemFromLootListItem()`
-fabricates a fully-formed `CSOEconItem`: for paintable items it rolls a seed (0–1000) and wear
-(uniform in the kit's min/max float), sets the paint-kit attribute, and for StatTrak adds the
-kill-eater attributes and bumps quality.
+Loads `csgo/scripts/items/items_game.txt` (or `csgo_gc/items_game.txt`) and indexes items (with
+prefab inheritance), attributes, sticker kits, paint kits (+ rarities), music definitions, item
+sets, and the revolving/unusual/client **loot lists** used by case opening.
+`CreateItemFromLootListItem()` fabricates a fully-formed `CSOEconItem`: for paintable items it
+rolls a seed (0–1000) and wear (uniform in the kit's min/max float), sets the paint-kit
+attribute, and for StatTrak adds the kill-eater attributes and bumps quality.
+
+CS2 ships `items_game.txt` inside `pak01_*.vpk`, so the file is often absent and the schema ends
+up empty. `ItemSchema::HasItemDefinitions()` reports that state. RCON `give_item` still works
+without it (see §9.6); case opening and trade-up require a real schema.
 
 ### 9.5 Case opening selection (`case_opening.cpp`)
 
@@ -373,6 +377,45 @@ kill-eater attributes and bumps quality.
 
 The `origin == 5` is not cosmetic — the game's unbox-response handler **finds the new item by
 scanning for `origin == 5`** (see §10.5).
+
+### 9.6 RCON (`rcon_server.cpp`)
+
+`GT-610/csgo-gc`'s GC-side RCON, ported. It is a plaintext Source RCON TCP listener that
+administers `inventory.txt` and the SO cache; it never talks to the game server, so server
+convars are out of scope.
+
+Config (`csgo_gc/config.txt`):
+
+```
+"rcon"
+{
+    "enabled"       "0"
+    "bind_address"  "127.0.0.1"
+    "port"          "37016"
+    "password"      ""
+}
+```
+
+An empty password accepts any password, so keep `bind_address` on loopback unless you set one.
+
+- `rcon_server.{h,cpp}` — listener, framing, auth, per-connection threads. Lives outside the GC;
+  it forwards commands through `ClientGC::RunRconCommand`.
+- `RconServer::RegisterClient` / `UnregisterClient` are called from
+  `SteamGameCoordinatorProxy` in `steam_hook.cpp`; `Start()` runs during client GC init.
+- Commands arrive on a socket thread, so they are posted to the GC thread as
+  `GCEvent::RconCommand` and the socket thread waits on a `std::promise` (5 s timeout).
+- Commands: `ping`, `status`, `clients`, `help`, `list_items [limit]`, `find_item <...>`,
+  `item_info <itemid>`, `give_item <defindex> [count] [key=value...]`, `remove_item <itemid>`,
+  `refresh_inventory`, `save_inventory`.
+- `give_item` keys: `level`, `quality`, `rarity`, `name`, `paint`, `seed`, `wear`, `stattrak`,
+  `music`, `spray_color`, `spray_remaining`, `tournament_{event,stage,team0,team1,mvp}`,
+  `sticker0..5` with `_wear`/`_scale`/`_rotation`.
+- `give_item`/`remove_item` do not persist immediately; the inventory is also written when the
+  object is destroyed, but run `save_inventory` to be sure.
+- Without `items_game.txt`, `give_item` skips id/rarity validation and creates a raw item from
+  the supplied def index; pass `quality=`/`rarity=` explicitly, since paint-kit rarity cannot be
+  derived.
+- Tests: `ctest -R rcon` runs `rcon_server_tests` (listener-failure and loopback auth/ping/status).
 
 ---
 
@@ -520,6 +563,7 @@ Windows uses Win32 + PE walking; Unix uses `dlopen`/`dlsym` and Mach-O (macOS) o
 | Entry / hooks | `main.cpp`, `steam_hook.cpp`, `launcher/` |
 | GC core | `gc_shared.*`, `gc_client.*`, `gc_server.*`, `gc_message.*`, `gc_const*.h` |
 | Inventory / schema | `inventory.*`, `item_schema.*`, `case_opening.*`, `graffiti.*`, `keyvalue.*`, `config.*`, `game_profile.*`, `random.h` |
+| RCON | `rcon_server.{h,cpp}`, `rcon_server_tests.cpp`, `test_filesystem.h` |
 | Networking | `networking_client.*`, `networking_server.*`, `networking_shared.h` |
 | Platform | `platform.h`, `platform_windows.cpp`, `platform_unix.cpp`, `appid.cpp` |
 | Protobuf | `protobufs/*.proto`, `protobufs/*.pb.{h,cc}` |

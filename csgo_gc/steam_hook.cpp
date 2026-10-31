@@ -6,7 +6,9 @@
 #include "game_profile.h"
 #include "gc_active.h"
 #include "platform.h"
+#if !defined(TF2_GC_BUILD)
 #include "rcon_server.h"
+#endif
 #include <funchook.h>
 
 #ifdef _WIN32
@@ -146,7 +148,9 @@ public:
 // client connect/disconnect notifications
 static GCWrapper<ActiveClientGC, ActiveNetworkingClient> *s_clientGC;
 static GCWrapper<ActiveServerGC, ActiveNetworkingServer> *s_serverGC;
+#if !defined(TF2_GC_BUILD)
 static RconServer s_rconServer;
+#endif
 
 struct PlayerInfo
 {
@@ -562,7 +566,9 @@ public:
             assert(!s_clientGC);
             s_clientGC = new GCWrapper<ActiveClientGC, ActiveNetworkingClient>{ SteamNetworkingMessages(), steamId };
             Platform::Print("csgo_gc: ClientGC created for steamId=%llu\n", (unsigned long long)steamId);
+#if !defined(TF2_GC_BUILD)
             s_rconServer.RegisterClient(&s_clientGC->m_gc);
+#endif
         }
     }
 
@@ -578,7 +584,9 @@ public:
         else
         {
             assert(s_clientGC);
+#if !defined(TF2_GC_BUILD)
             s_rconServer.UnregisterClient(&s_clientGC->m_gc);
+#endif
             delete s_clientGC;
             s_clientGC = nullptr;
         }
@@ -3158,8 +3166,10 @@ void SteamHookPreInstall(bool dedicated)
 #endif // _WIN32
 
     // RCON is a client-inventory feature; dedicated servers have no ClientGC.
+#if !defined(TF2_GC_BUILD)
     if (!dedicated)
         s_rconServer.Start();
+#endif
 }
 
 #ifdef _WIN32
@@ -3250,6 +3260,8 @@ void SteamHookInstall(bool dedicated)
     }
 #endif
 
+#if !defined(TF2_GC_BUILD)
     if (!dedicated)
         s_rconServer.Start();
+#endif
 }

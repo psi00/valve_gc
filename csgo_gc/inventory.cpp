@@ -109,6 +109,51 @@ bool Inventory::BuildPreviewDataBlock(uint64_t itemId, CEconItemPreviewDataBlock
     return true;
 }
 
+static CSOEconItemAttribute *FindAttribute(CSOEconItem &item, uint32_t defIndex)
+{
+    for (CSOEconItemAttribute &attribute : *item.mutable_attribute())
+    {
+        if (attribute.def_index() == defIndex)
+        {
+            return &attribute;
+        }
+    }
+
+    return nullptr;
+}
+
+static CSOEconItemAttribute *FindOrAddAttribute(CSOEconItem &item, uint32_t defIndex)
+{
+    if (CSOEconItemAttribute *attribute = FindAttribute(item, defIndex))
+    {
+        return attribute;
+    }
+
+    CSOEconItemAttribute *attribute = item.add_attribute();
+    attribute->set_def_index(defIndex);
+    return attribute;
+}
+
+static uint32_t StickerIdAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerId0 + static_cast<uint32_t>(slot) * 4;
+}
+
+static uint32_t StickerWearAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerWear0 + static_cast<uint32_t>(slot) * 4;
+}
+
+static uint32_t StickerScaleAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerScale0 + static_cast<uint32_t>(slot) * 4;
+}
+
+static uint32_t StickerRotationAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerRotation0 + static_cast<uint32_t>(slot) * 4;
+}
+
 CSOEconItem &Inventory::AllocateItem(uint32_t highItemId)
 {
     // Players fuck up their inventory files constantly and end up with item id collisions...
@@ -317,7 +362,7 @@ void Inventory::ReadItem(const KeyValue &itemKey, CSOEconItem &item) const
     }
 }
 
-void Inventory::WriteToFile() const
+bool Inventory::WriteToFile() const
 {
     KeyValue inventoryKey{ "inventory" };
 
@@ -343,7 +388,7 @@ void Inventory::WriteToFile() const
         }
     }
 
-    inventoryKey.WriteToFile(InventoryFilePath);
+    return inventoryKey.WriteToFile(InventoryFilePath);
 }
 
 void Inventory::WriteItem(KeyValue &itemKey, const CSOEconItem &item) const
@@ -1611,6 +1656,257 @@ uint64_t Inventory::PurchaseItem(uint32_t defIndex, std::vector<CMsgSOSingleObje
     ToSingleObject(single, item);
 
     return item.id();
+}
+
+uint64_t Inventory::CreateRconItem(uint32_t defIndex,
+    const ParameterizedItemOptions &options,
+    CMsgSOSingleObject &update,
+    std::string &error)
+{
+    // CS2 ships items_game.txt inside a VPK, so the schema is often empty. In that
+    // case we cannot validate ids or derive rarity, but the game client still
+    // resolves the definition it is given, so fall back to a raw item.
+    const bool haveSchema = m_itemSchema.HasItemDefinitions();
+
+    if (haveSchema && !m_itemSchema.ItemInfoByDefIndex(defIndex))
+    {
+        error = "unknown defindex";
+        return 0;
+    }
+
+    if (haveSchema && options.paint && !m_itemSchema.PaintKitInfoByDefIndex(*options.paint))
+    {
+        error = "unknown paint";
+        return 0;
+    }
+
+    if (haveSchema && options.music && !m_itemSchema.MusicDefinitionInfoByDefIndex(*options.music))
+    {
+        error = "unknown music";
+        return 0;
+    }
+
+    if (options.music && defIndex != ItemSchema::ItemMusicKit)
+    {
+        error = "music requires defindex 1314";
+        return 0;
+    }
+
+    if (options.sprayColor
+        && (*options.sprayColor < ItemSchema::GraffitiTintMin || *options.sprayColor > ItemSchema::GraffitiTintMax))
+    {
+        error = "invalid parameter spray_color";
+        return 0;
+    }
+
+    if (haveSchema)
+    {
+        for (const std::optional<uint32_t> &sticker : options.sticker)
+        {
+            if (sticker && !m_itemSchema.StickerKitInfoByDefIndex(*sticker))
+            {
+                error = "unknown sticker";
+                return 0;
+            }
+        }
+    }
+
+    CSOEconItem *item = nullptr;
+    if (haveSchema)
+    {
+        // RCON grants mimic an incoming trade so the game can use its native
+        // server-wide item-found announcement.
+        item = &CreateItem(defIndex, ItemOriginTraded, UnacknowledgedTraded);
+    }
+    else
+    {
+        CSOEconItem &rawItem = AllocateItem(0);
+        rawItem.set_inventory(InventoryUnacknowledged(UnacknowledgedTraded));
+        rawItem.set_def_index(defIndex);
+        rawItem.set_quantity(1);
+        rawItem.set_level(1);
+        rawItem.set_quality(ItemSchema::QualityUnique);
+        rawItem.set_flags(0);
+        rawItem.set_origin(ItemOriginTraded);
+        rawItem.set_in_use(false);
+        rawItem.set_rarity(ItemSchema::RarityCommon);
+
+        Platform::Print("Inventory: items_game.txt unavailable, creating RCON item %u without schema validation\n",
+            defIndex);
+        item = &rawItem;
+    }
+
+    if (options.level)
+    {
+        item->set_level(*options.level);
+    }
+
+    if (options.customName && !options.customName->empty())
+    {
+        item->mutable_custom_name()->assign(*options.customName);
+    }
+
+    if (options.paint)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeTexturePrefab);
+        m_itemSchema.SetAttributeUint32(attribute, *options.paint);
+
+        attribute = FindOrAddAttribute(*item, ItemSchema::AttributeTextureSeed);
+        m_itemSchema.SetAttributeUint32(attribute, options.seed.value_or(0));
+
+        attribute = FindOrAddAttribute(*item, ItemSchema::AttributeTextureWear);
+        m_itemSchema.SetAttributeFloat(attribute, options.wear.value_or(0.001f));
+
+        if (!options.quality)
+        {
+            item->set_quality(ItemSchema::QualityUnique);
+        }
+
+        if (!options.rarity)
+        {
+            item->set_rarity(m_itemSchema.GetPaintedRarity(defIndex, *options.paint, item->rarity()));
+        }
+    }
+    else
+    {
+        if (options.seed)
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeTextureSeed);
+            m_itemSchema.SetAttributeUint32(attribute, *options.seed);
+        }
+
+        if (options.wear)
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeTextureWear);
+            m_itemSchema.SetAttributeFloat(attribute, *options.wear);
+        }
+    }
+
+    if (options.music)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeMusicId);
+        m_itemSchema.SetAttributeUint32(attribute, *options.music);
+
+        attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKillEater);
+        m_itemSchema.SetAttributeUint32(attribute, options.statTrak ? (*options.statTrak == 1 ? 0 : *options.statTrak) : 0);
+
+        attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKillEaterScoreType);
+        m_itemSchema.SetAttributeUint32(attribute, 1);
+
+        if (!options.quality)
+        {
+            item->set_quality(options.statTrak ? ItemSchema::QualityStrange : ItemSchema::QualityUnique);
+        }
+
+        if (!options.rarity)
+        {
+            item->set_rarity(ItemSchema::RarityRare);
+        }
+    }
+
+    if (options.statTrak && !options.music)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKillEater);
+        m_itemSchema.SetAttributeUint32(attribute, *options.statTrak == 1 ? 0 : *options.statTrak);
+
+        attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKillEaterScoreType);
+        m_itemSchema.SetAttributeUint32(attribute, 0);
+
+        if (!options.quality)
+        {
+            item->set_quality(ItemSchema::QualityStrange);
+        }
+    }
+
+    if (options.sprayColor)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeSprayTintId);
+        m_itemSchema.SetAttributeUint32(attribute, *options.sprayColor);
+    }
+
+    if (options.sprayRemaining)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeSpraysRemaining);
+        m_itemSchema.SetAttributeUint32(attribute, *options.sprayRemaining);
+    }
+
+    auto setTournamentAttribute = [&](const std::optional<uint32_t> &value, uint32_t attributeDefIndex)
+    {
+        if (!value)
+        {
+            return;
+        }
+
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, attributeDefIndex);
+        m_itemSchema.SetAttributeUint32(attribute, *value);
+    };
+
+    setTournamentAttribute(options.tournament.eventId, ItemSchema::AttributeTournamentEventId);
+    setTournamentAttribute(options.tournament.stageId, ItemSchema::AttributeTournamentEventStageId);
+    setTournamentAttribute(options.tournament.team0Id, ItemSchema::AttributeTournamentTeam0Id);
+    setTournamentAttribute(options.tournament.team1Id, ItemSchema::AttributeTournamentTeam1Id);
+    setTournamentAttribute(options.tournament.mvpAccountId, ItemSchema::AttributeTournamentMvpAccountId);
+
+    if (options.keychain)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKeychainSlot0Id);
+        m_itemSchema.SetAttributeUint32(attribute, *options.keychain);
+
+        // The client expects the slot offsets alongside the id; zero uses the
+        // weapon's default charm anchor.
+        const std::pair<ItemSchema::Attribute, float> offsets[] = {
+            { ItemSchema::AttributeKeychainSlot0OffsetX, 0.0f },
+            { ItemSchema::AttributeKeychainSlot0OffsetY, 0.0f },
+            { ItemSchema::AttributeKeychainSlot0OffsetZ, 0.0f },
+        };
+        for (const auto &offset : offsets)
+        {
+            attribute = FindOrAddAttribute(*item, offset.first);
+            m_itemSchema.SetAttributeFloat(attribute, offset.second);
+        }
+    }
+
+    for (size_t i = 0; i < options.sticker.size(); i++)
+    {
+        if (options.sticker[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerIdAttribute(i));
+            m_itemSchema.SetAttributeUint32(attribute, *options.sticker[i]);
+
+            attribute = FindOrAddAttribute(*item, StickerWearAttribute(i));
+            m_itemSchema.SetAttributeFloat(attribute, options.stickerWear[i].value_or(0.0f));
+        }
+        else if (options.stickerWear[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerWearAttribute(i));
+            m_itemSchema.SetAttributeFloat(attribute, *options.stickerWear[i]);
+        }
+
+        if (options.stickerScale[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerScaleAttribute(i));
+            m_itemSchema.SetAttributeFloat(attribute, *options.stickerScale[i]);
+        }
+
+        if (options.stickerRotation[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerRotationAttribute(i));
+            m_itemSchema.SetAttributeFloat(attribute, *options.stickerRotation[i]);
+        }
+    }
+
+    if (options.quality)
+    {
+        item->set_quality(*options.quality);
+    }
+
+    if (options.rarity)
+    {
+        item->set_rarity(*options.rarity);
+    }
+
+    ToSingleObject(update, *item);
+    return item->id();
 }
 
 bool Inventory::UnequipItem(uint64_t itemId, CMsgSOMultipleObjects &update)

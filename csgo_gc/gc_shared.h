@@ -20,6 +20,7 @@ enum class GCEvent
     ClientSOCacheUnsubscribe, // sent to server gc when a client disconnects, id contains the steam id
     ReloadInventory, // sent to client gc when inventory.txt changes on disk
     RoundEnd,        // sent to client gc when a round ends on the client
+    RconCommand,     // sent to client gc, buffer contains an owned RconCommand holder pointer
 };
 
 struct EventData

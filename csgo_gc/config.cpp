@@ -56,6 +56,21 @@ GCConfig::GCConfig()
         m_dangerZoneWins = ranks->GetNumber("dangerzone_wins", m_dangerZoneWins);
     }
 
+    const KeyValue *rcon = config.GetSubkey("rcon");
+    if (rcon)
+    {
+        m_rconEnabled = rcon->GetNumber("enabled", m_rconEnabled);
+
+        std::string_view bindAddress = rcon->GetString("bind_address");
+        if (!bindAddress.empty())
+        {
+            m_rconBindAddress = std::string{ bindAddress };
+        }
+
+        m_rconPort = rcon->GetNumber("port", m_rconPort);
+        m_rconPassword = std::string{ rcon->GetString("password") };
+    }
+
     m_destroyUsedItems = config.GetNumber("destroy_used_items", m_destroyUsedItems);
     m_enableMatchDrops = config.GetNumber("enable_match_drops", m_enableMatchDrops);
     m_xpPerRound = config.GetNumber("xp_per_round", m_xpPerRound);

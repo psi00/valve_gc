@@ -41,6 +41,11 @@ public:
     bool EnableMatchDrops() const { return m_enableMatchDrops; }
     int XpPerRound() const { return m_xpPerRound; }
     int MaxServerItems() const { return m_maxServerItems; }
+
+    bool RconEnabled() const { return m_rconEnabled; }
+    std::string_view RconBindAddress() const { return m_rconBindAddress; }
+    uint16_t RconPort() const { return m_rconPort; }
+    std::string_view RconPassword() const { return m_rconPassword; }
     const std::vector<uint32_t> &MedalDefIndexes() const { return m_medalDefIndexes; }
     uint32_t FeaturedMedalDefIndex() const { return m_featuredMedalDefIndex; }
 
@@ -74,6 +79,11 @@ private:
     bool m_enableMatchDrops{ true };
     int m_xpPerRound{ 150 };
     int m_maxServerItems{ 64 };
+
+    bool m_rconEnabled{ false };
+    std::string m_rconBindAddress{ "127.0.0.1" };
+    uint16_t m_rconPort{ 37016 };
+    std::string m_rconPassword;
     std::vector<uint32_t> m_medalDefIndexes;
     uint32_t m_featuredMedalDefIndex{ 0 };
 

@@ -150,6 +150,11 @@ public:
     // trade-up helpers
     const ItemInfo *ItemInfoByDefIndex(uint32_t defIndex) const;
     const PaintKitInfo *PaintKitInfoByDefIndex(uint32_t defIndex) const;
+    const StickerKitInfo *StickerKitInfoByDefIndex(uint32_t defIndex) const;
+    const MusicDefinitionInfo *MusicDefinitionInfoByDefIndex(uint32_t defIndex) const;
+
+    // false when items_game.txt could not be loaded (CS2 ships it inside a VPK)
+    bool HasItemDefinitions() const { return !m_itemInfo.empty(); }
     bool GetCollectionsForPaintedItem(uint32_t defIndex, uint32_t paintKitDefIndex,
         std::vector<std::string> &outCollections) const;
     bool GetCollectionsForPaintKit(uint32_t paintKitDefIndex,
@@ -259,6 +264,18 @@ public:
 
         AttributeSpraysRemaining = 232,
         AttributeSprayTintId = 233,
+
+        // CS2 charm attachment. The id names a keychain definition, not a def_index.
+        AttributeKeychainSlot0Id = 299,
+        AttributeKeychainSlot0OffsetX = 300,
+        AttributeKeychainSlot0OffsetY = 301,
+        AttributeKeychainSlot0OffsetZ = 302,
+
+        AttributeTournamentEventId = 137,
+        AttributeTournamentEventStageId = 138,
+        AttributeTournamentTeam0Id = 139,
+        AttributeTournamentTeam1Id = 140,
+        AttributeTournamentMvpAccountId = 223,
 
         AttributeCasketItemsCount = 270,
         AttributeCasketModificationDate = 271,

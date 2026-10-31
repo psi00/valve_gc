@@ -14,6 +14,38 @@ public:
     Inventory(uint64_t steamId);
     ~Inventory();
 
+    struct ParameterizedItemOptions
+    {
+        struct TournamentOptions
+        {
+            std::optional<uint32_t> eventId;
+            std::optional<uint32_t> stageId;
+            std::optional<uint32_t> team0Id;
+            std::optional<uint32_t> team1Id;
+            std::optional<uint32_t> mvpAccountId;
+        };
+
+        std::optional<uint32_t> level;
+        std::optional<uint32_t> quality;
+        std::optional<uint32_t> rarity;
+        std::optional<std::string> customName;
+
+        std::optional<uint32_t> paint;
+        std::optional<uint32_t> seed;
+        std::optional<float> wear;
+        std::optional<uint32_t> statTrak;
+        std::optional<uint32_t> music;
+        std::optional<uint32_t> keychain;
+        std::optional<uint32_t> sprayColor;
+        std::optional<uint32_t> sprayRemaining;
+        TournamentOptions tournament;
+
+        std::array<std::optional<uint32_t>, 6> sticker;
+        std::array<std::optional<float>, 6> stickerWear;
+        std::array<std::optional<float>, 6> stickerScale;
+        std::array<std::optional<float>, 6> stickerRotation;
+    };
+
     void BuildCacheSubscription(CMsgSOCacheSubscribed &message, int level, bool server);
 
     // re-reads inventory.txt in place; call BuildCacheSubscription afterwards to push to game
@@ -25,7 +57,7 @@ public:
     bool EquipItem(uint64_t itemId, uint32_t classId, uint32_t slotId, CMsgSOMultipleObjects &update);
 
     // persist the current inventory to disk (loadout/equip changes, etc.)
-    void Save() const { WriteToFile(); }
+    bool Save() const { return WriteToFile(); }
 
     bool RemoveItem(uint64_t itemId, CMsgSOSingleObject &destroy);
 
@@ -80,6 +112,8 @@ public:
         CMsgGCItemCustomizationNotification &notification);
 
     const CSOEconItem *GetItem(uint64_t itemId) const;
+    size_t ItemCount() const { return m_items.size(); }
+    const ItemMap &Items() const { return m_items; }
     bool BuildPreviewDataBlock(uint64_t itemId, CEconItemPreviewDataBlock &block);
     const ItemSchema &GetItemSchema() const { return m_itemSchema; }
 
@@ -140,6 +174,13 @@ public:
     // on failure returns 0 and does nothing
     uint64_t PurchaseItem(uint32_t defIndex, std::vector<CMsgSOSingleObject> &update);
 
+    // creates an item granted through RCON. returns the item id on success, or 0
+    // and an error string on failure.
+    uint64_t CreateRconItem(uint32_t defIndex,
+        const ParameterizedItemOptions &options,
+        CMsgSOSingleObject &update,
+        std::string &error);
+
 private:
     uint32_t AccountId() const;
 
@@ -154,7 +195,7 @@ private:
     void ReadFromFile();
     void ReadItem(const KeyValue &itemKey, CSOEconItem &item) const;
 
-    void WriteToFile() const;
+    bool WriteToFile() const;
     void WriteItem(KeyValue &itemKey, const CSOEconItem &item) const;
 
     // helper, only called via EquipItem

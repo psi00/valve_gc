@@ -137,6 +137,10 @@ ItemSchema::ItemSchema()
         { 168, AttributeType::Uint32 }, // quest id
         { 232, AttributeType::Uint32 }, // sprays remaining
         { 233, AttributeType::Uint32 }, // spray tint id
+        { 299, AttributeType::Uint32 }, // keychain slot 0 id
+        { 300, AttributeType::Float }, // keychain slot 0 offset x
+        { 301, AttributeType::Float }, // keychain slot 0 offset y
+        { 302, AttributeType::Float }, // keychain slot 0 offset z
         { 137, AttributeType::Uint32 }, // tournament event id
         { 138, AttributeType::Uint32 }, // tournament event stage id
         { 139, AttributeType::Uint32 }, // tournament team 0 id

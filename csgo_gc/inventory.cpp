@@ -1847,6 +1847,25 @@ uint64_t Inventory::CreateRconItem(uint32_t defIndex,
     setTournamentAttribute(options.tournament.team1Id, ItemSchema::AttributeTournamentTeam1Id);
     setTournamentAttribute(options.tournament.mvpAccountId, ItemSchema::AttributeTournamentMvpAccountId);
 
+    if (options.keychain)
+    {
+        CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKeychainSlot0Id);
+        m_itemSchema.SetAttributeUint32(attribute, *options.keychain);
+
+        // The client expects the slot offsets alongside the id; zero uses the
+        // weapon's default charm anchor.
+        const std::pair<ItemSchema::Attribute, float> offsets[] = {
+            { ItemSchema::AttributeKeychainSlot0OffsetX, 0.0f },
+            { ItemSchema::AttributeKeychainSlot0OffsetY, 0.0f },
+            { ItemSchema::AttributeKeychainSlot0OffsetZ, 0.0f },
+        };
+        for (const auto &offset : offsets)
+        {
+            attribute = FindOrAddAttribute(*item, offset.first);
+            m_itemSchema.SetAttributeFloat(attribute, offset.second);
+        }
+    }
+
     for (size_t i = 0; i < options.sticker.size(); i++)
     {
         if (options.sticker[i])

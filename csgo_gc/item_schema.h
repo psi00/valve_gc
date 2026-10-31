@@ -265,6 +265,12 @@ public:
         AttributeSpraysRemaining = 232,
         AttributeSprayTintId = 233,
 
+        // CS2 charm attachment. The id names a keychain definition, not a def_index.
+        AttributeKeychainSlot0Id = 299,
+        AttributeKeychainSlot0OffsetX = 300,
+        AttributeKeychainSlot0OffsetY = 301,
+        AttributeKeychainSlot0OffsetZ = 302,
+
         AttributeTournamentEventId = 137,
         AttributeTournamentEventStageId = 138,
         AttributeTournamentTeam0Id = 139,

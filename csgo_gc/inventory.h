@@ -35,6 +35,7 @@ public:
         std::optional<float> wear;
         std::optional<uint32_t> statTrak;
         std::optional<uint32_t> music;
+        std::optional<uint32_t> keychain;
         std::optional<uint32_t> sprayColor;
         std::optional<uint32_t> sprayRemaining;
         TournamentOptions tournament;

@@ -86,6 +86,8 @@ bool CheckParameterizedItem(const Inventory &inventory, uint64_t itemId)
     const CSOEconItemAttribute *stickerWear = FindAttribute(*item, ItemSchema::AttributeStickerWear0);
     const CSOEconItemAttribute *stickerScale = FindAttribute(*item, ItemSchema::AttributeStickerScale0);
     const CSOEconItemAttribute *stickerRotation = FindAttribute(*item, ItemSchema::AttributeStickerRotation0);
+    const CSOEconItemAttribute *keychainId = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0Id);
+    const CSOEconItemAttribute *keychainX = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0OffsetX);
 
     success &= music && schema.AttributeUint32(music) == 3;
     success &= killEater && schema.AttributeUint32(killEater) == 5;
@@ -98,6 +100,8 @@ bool CheckParameterizedItem(const Inventory &inventory, uint64_t itemId)
     success &= stickerWear && FloatNear(schema.AttributeFloat(stickerWear), 0.1f);
     success &= stickerScale && FloatNear(schema.AttributeFloat(stickerScale), 1.5f);
     success &= stickerRotation && FloatNear(schema.AttributeFloat(stickerRotation), 30.0f);
+    success &= keychainId && schema.AttributeUint32(keychainId) == 42;
+    success &= keychainX && FloatNear(schema.AttributeFloat(keychainX), 0.0f);
 
     return success;
 }
@@ -141,6 +145,7 @@ bool RunTests()
         Inventory::ParameterizedItemOptions fullOptions;
         fullOptions.music = 3;
         fullOptions.statTrak = 5;
+        fullOptions.keychain = 42;
         fullOptions.sprayColor = 7;
         fullOptions.sprayRemaining = 11;
         fullOptions.tournament.eventId = 42;

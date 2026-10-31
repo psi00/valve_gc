@@ -789,6 +789,10 @@ std::string ClientGC::RconGiveItem(const RconRequest &request)
         {
             error = parseUint32(options.music);
         }
+        else if (key == "keychain")
+        {
+            error = parseUint32(options.keychain);
+        }
         else if (key == "spray_color")
         {
             error = parseUint32(options.sprayColor);

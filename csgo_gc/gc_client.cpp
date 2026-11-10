@@ -17,6 +17,11 @@
 // headers, so define it here. See ClientGC::OpenCrate.
 static constexpr uint32_t k_EMsgGCOpenCrate = 2534;
 
+// The keychain/charm entries of EGCItemCustomizationNotification. Same story as above: the
+// committed econ_gcmessages.proto predates charms, so the values come from current CS2.
+static constexpr uint32_t k_EGCItemCustomizationNotification_ApplyKeychain = 1091;
+static constexpr uint32_t k_EGCItemCustomizationNotification_RemoveKeychain = 1092;
+
 static bool GetItemPaintKitDefIndex(const CSOEconItem &item, const ItemSchema &schema, uint32_t &paintKitDefIndex)
 {
     for (const CSOEconItemAttribute &attr : item.attribute())
@@ -1156,6 +1161,10 @@ void ClientGC::HandleMessage(uint32_t type, const void *data, uint32_t size)
             OpenCrate(messageRead);
             break;
 
+        case k_EMsgGCModifyItemAttribute:
+            ModifyItemAttribute(messageRead);
+            break;
+
         default:
             Platform::Print("ClientGC::HandleMessage: unhandled protobuf message %s\n",
                 MessageName(messageRead.TypeUnmasked()));
@@ -1842,14 +1851,12 @@ void ClientGC::OpenCrate(GCMessageRead &messageRead)
         return;
     }
 
-    // Unboxing is a SINGLE step at the GC level (verified by RE of client.dll's
-    // CGCUnlockCrateResponse job): the client sends OpenCrate as a *job* and waits for a
-    // k_EMsgGCUnlockCrateResponse addressed to that job id. On result 0 the job scans the SO
-    // cache for the highest-id origin==5 item and fires the X-ray reveal UI itself; a non-zero
-    // result or a timed-out job is what shows the "unable to retrieve your item" dialog. So we
-    // just run the normal unlock and reply to the job. (The earlier two-step "scan/commit"
-    // model was wrong: it sent the reveal notification but never answered the job, so the job
-    // always timed out.)
+    // Unboxing is a SINGLE step at the GC level: the client sends OpenCrate with no job id
+    // (the CMsgProtoBufHeader is absent, GCMessageRead reports JobIdInvalid) and waits for a
+    // k_EMsgGCUnlockCrateResponse carrying a result code. On result 0 the client fires the
+    // reveal itself by scanning the SO cache for the highest-id origin==5 item; a non-zero
+    // result or a message too short to hold one is what shows the "we are unable to
+    // retrieve your item" dialog. See BuildUnlockCrateResponse for the wire format.
     DoUnlockCrate(crateId, keyId, messageRead.JobId());
 }
 
@@ -1864,6 +1871,30 @@ void ClientGC::UnlockCrate(GCMessageRead &messageRead)
     }
 
     DoUnlockCrate(crateId, keyId, messageRead.JobId());
+}
+
+// k_EMsgGCUnlockCrateResponse is not a protobuf message at all any more. CS2's handler for it
+// (the one in client.dll that logs "Unlock crate response: %d") does roughly:
+//     size = job->GetMsgSize();  if (size < 40) return false;
+//     result = *(const uint32_t *)(job->GetMsg() + 36);
+// so the reply has to be at least 40 bytes with a zero at offset 36. The empty
+// CMsgGCItemCustomizationNotification that used to be sent here is 8 bytes, which fails the
+// size check and pops "we were unable to retrieve your item" even though the item was created
+// and sent. Pad the body with a single length delimited field of zero bytes: the result then
+// reads 0 whether the client indexes from the start of the message or from the start of the
+// body, and the body stays a valid protobuf (an empty or truncated one does not).
+static void BuildUnlockCrateResponse(uint64_t jobId, std::vector<uint8_t> &out)
+{
+    CMsgGCItemCustomizationNotification emptyBody;
+    GCMessageWrite messageWrite{ k_EMsgGCUnlockCrateResponse, emptyBody, jobId };
+
+    const uint8_t *bytes = static_cast<const uint8_t *>(messageWrite.Data());
+    out.assign(bytes, bytes + messageWrite.Size());
+
+    // field 1, wire type 2, 42 byte payload: a 44 byte body, so offset 36 is inside it
+    out.push_back(0x0A);
+    out.push_back(0x2A);
+    out.resize(out.size() + 42, 0);
 }
 
 void ClientGC::DoUnlockCrate(uint64_t crateId, uint64_t keyId, uint64_t jobId)
@@ -1890,25 +1921,67 @@ void ClientGC::DoUnlockCrate(uint64_t crateId, uint64_t keyId, uint64_t jobId)
         SendMessageToGame(true, k_ESOMsg_Destroy, destroyKey);
         SendMessageToGame(true, k_ESOMsg_Create, newItem);
 
-        // The unbox reply. CS2's CGCUnlockCrateResponse job (handler for msg 1008) reads a
-        // result code from the body: 0 = success, and on success the job fires the reveal
-        // itself by scanning the SO cache for the freshly-created origin=5 item. A non-zero
-        // or timed-out result is what produces the "we are unable to retrieve your item"
-        // dialog. So send 1008 with an empty body (result 0) and the request's job id so the
-        // waiting job receives it. (Create must precede this — done above — so the success
-        // path finds the item.)
+        // The unbox reply. CS2 reads a uint32 result at byte offset 36 of this message and
+        // gives up unless the message is at least 40 bytes long, so it cannot be empty.
         {
-            CMsgGCItemCustomizationNotification emptyResponse; // empty -> result 0
-            SendMessageToGame(false, k_EMsgGCUnlockCrateResponse, emptyResponse, jobId);
+            std::vector<uint8_t> response;
+            BuildUnlockCrateResponse(jobId, response);
+            GCMessageWrite messageWrite{ response.data(), static_cast<uint32_t>(response.size()) };
+            PostToHost(HostEvent::Message, messageWrite.TypeMasked(),
+                messageWrite.Data(), messageWrite.Size());
         }
 
-        // Inventory-UI notification (no job id; the reveal is driven by the job above).
+        // Inventory-UI notification (no job id; the reveal is driven by the reply above).
         SendMessageToGame(false, k_EMsgGCItemCustomizationNotification, notification);
     }
     else
     {
         assert(false);
     }
+}
+
+// Charms ("keychains" in the schema) are applied and removed one attribute at a time through
+// k_EMsgGCModifyItemAttribute: 299 = slot 0 keychain id, 300..302 = slot 0 offsets, 306 = seed,
+// 314 = highlight, 321 = sticker. The client waits for the reply, a
+// k_EMsgGCItemCustomizationNotification carrying ApplyKeychain (1091) or RemoveKeychain (1092),
+// and shows a spinner until it arrives. This message used to have no handler at all, so the
+// attach spun forever: the attribute was never stored and nothing was ever sent back.
+void ClientGC::ModifyItemAttribute(GCMessageRead &messageRead)
+{
+    CMsgModifyItemAttribute message;
+    if (!messageRead.ReadProtobuf(message))
+    {
+        Platform::Print("Parsing CMsgModifyItemAttribute failed, ignoring\n");
+        return;
+    }
+
+    Platform::Print("MODIFY ITEM ATTRIBUTE item=%llu defidx=%u value=%u jobId=%llu\n",
+        message.item_id(), message.attr_defidx(), message.attr_value(), messageRead.JobId());
+
+    CMsgSOSingleObject update;
+    if (!m_inventory.ModifyItemAttribute(
+            message.item_id(), message.attr_defidx(), message.attr_value(), update))
+    {
+        Platform::Print("ModifyItemAttribute: item %llu is not in the inventory, ignoring\n",
+            message.item_id());
+        return;
+    }
+
+    CMsgGCItemCustomizationNotification notification;
+    notification.add_item_id(message.item_id());
+    // Clearing the keychain id is how the client removes a charm; every other attribute value
+    // is part of applying (or repositioning) one.
+    if (message.attr_defidx() == ItemSchema::AttributeKeychainSlot0Id && message.attr_value() == 0)
+    {
+        notification.set_request(k_EGCItemCustomizationNotification_RemoveKeychain);
+    }
+    else
+    {
+        notification.set_request(k_EGCItemCustomizationNotification_ApplyKeychain);
+    }
+
+    SendMessageToGame(true, k_ESOMsg_Update, update);
+    SendMessageToGame(false, k_EMsgGCItemCustomizationNotification, notification, messageRead.JobId());
 }
 
 void ClientGC::NameItem(GCMessageRead &messageRead)

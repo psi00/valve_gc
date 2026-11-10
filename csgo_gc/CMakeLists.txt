@@ -17,7 +17,8 @@ add_library(csgo_gc SHARED
     networking_client.cpp
     networking_server.cpp
     rcon_server.cpp
-    steam_hook.cpp)
+    steam_hook.cpp
+    vpk.cpp)
 
 if (CMAKE_SYSTEM_NAME STREQUAL "Windows")
     target_sources(csgo_gc PRIVATE platform_windows.cpp)
@@ -114,7 +115,8 @@ if (BUILD_TESTING)
         inventory.cpp
         inventory_rcon_tests.cpp
         item_schema.cpp
-        keyvalue.cpp)
+        keyvalue.cpp
+        vpk.cpp)
 
     target_precompile_headers(inventory_rcon_tests PRIVATE stdafx.h)
     target_link_libraries(inventory_rcon_tests PRIVATE

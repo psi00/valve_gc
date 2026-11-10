@@ -153,6 +153,16 @@ bool KeyValue::ParseFromFile(const char *path)
         return false;
     }
 
+    return ParseFromString(data);
+}
+
+bool KeyValue::ParseFromString(std::string_view data)
+{
+    if (data.empty())
+    {
+        return false;
+    }
+
     KeyValueParser parser{ data };
     return Parse(parser);
 }

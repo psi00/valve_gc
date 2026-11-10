@@ -5,6 +5,7 @@
 
 #include <cstdarg>
 #include <cstdio>
+#include <cstdlib>
 #include <iterator>
 
 namespace
@@ -121,8 +122,24 @@ bool RunTests()
     {
         Inventory inventory{ TestSteamId };
 
-        // no items_game.txt in the test working directory: exercises the raw fallback
-        success &= !inventory.GetItemSchema().HasItemDefinitions();
+        // No items_game.txt in the test working directory exercises the raw
+        // fallback. When one is supplied (see tools/extract_items_game.py) the
+        // real CS2 schema has to load and resolve crate loot lists.
+        const bool haveSchema = inventory.GetItemSchema().HasItemDefinitions();
+        if (!haveSchema)
+        {
+            success &= !inventory.GetItemSchema().HasItemDefinitions();
+        }
+        else
+        {
+            Platform::Print("schema check: crate 4745 loot list = %p\n",
+                static_cast<const void *>(inventory.GetItemSchema().GetCrateLootList(4745)));
+            Platform::Print("schema check: crate 4001 loot list = %p\n",
+                static_cast<const void *>(inventory.GetItemSchema().GetCrateLootList(4001)));
+
+            // 4745 = "crate_sticker_pack_rmr2020_contenders" (supply crate series 313)
+            success &= inventory.GetItemSchema().GetCrateLootList(4745) != nullptr;
+        }
         success &= inventory.ItemCount() == 0;
 
         Inventory::ParameterizedItemOptions options;
@@ -161,6 +178,42 @@ bool RunTests()
         success &= error.empty();
         success &= inventory.ItemCount() == 2;
         success &= CheckParameterizedItem(inventory, musicItemId);
+
+        // Charms: the client applies a keychain by sending CMsgModifyItemAttribute jobs, one
+        // attribute at a time. Inventory::ModifyItemAttribute is what persists them, and
+        // without it the attach spins forever (nothing was ever stored or answered).
+        if (haveSchema)
+        {
+            CMsgSOSingleObject keychainUpdate;
+
+            success &= inventory.ModifyItemAttribute(
+                itemId, ItemSchema::AttributeKeychainSlot0Id, 42, keychainUpdate);
+            const CSOEconItemAttribute *keychainId = FindAttribute(
+                inventory.Items().at(itemId), ItemSchema::AttributeKeychainSlot0Id);
+            success &= keychainId
+                && inventory.GetItemSchema().AttributeUint32(keychainId) == 42;
+
+            // offsets are floats: the wire value is the raw IEEE float, not the integer
+            success &= inventory.ModifyItemAttribute(itemId,
+                ItemSchema::AttributeKeychainSlot0OffsetX,
+                0x3F800000, // 1.0f
+                keychainUpdate);
+            const CSOEconItemAttribute *offsetX = FindAttribute(
+                inventory.Items().at(itemId), ItemSchema::AttributeKeychainSlot0OffsetX);
+            success &= offsetX
+                && inventory.GetItemSchema().AttributeFloat(offsetX) == 1.0f;
+
+            // a zero keychain id is how the client takes a charm off again
+            success &= inventory.ModifyItemAttribute(
+                itemId, ItemSchema::AttributeKeychainSlot0Id, 0, keychainUpdate);
+            keychainId = FindAttribute(
+                inventory.Items().at(itemId), ItemSchema::AttributeKeychainSlot0Id);
+            success &= keychainId
+                && inventory.GetItemSchema().AttributeUint32(keychainId) == 0;
+
+            // items we do not own are rejected instead of inventing an entry
+            success &= !inventory.ModifyItemAttribute(0xDEAD, 299, 1, keychainUpdate);
+        }
 
         // validation still applies to values that do not depend on the schema
         CMsgSOSingleObject invalidUpdate;
@@ -215,8 +268,17 @@ bool RunTests()
 namespace Platform
 {
 
-void Print(const char *, ...)
+void Print(const char *format, ...)
 {
+    if (!getenv("GC_TEST_VERBOSE"))
+    {
+        return;
+    }
+
+    va_list ap;
+    va_start(ap, format);
+    vfprintf(stderr, format, ap);
+    va_end(ap);
 }
 
 } // namespace Platform

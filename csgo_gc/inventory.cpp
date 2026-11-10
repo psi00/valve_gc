@@ -1182,6 +1182,49 @@ bool Inventory::IncrementKillCountAttribute(uint64_t itemId, uint32_t amount, CM
     return false;
 }
 
+bool Inventory::ModifyItemAttribute(uint64_t itemId,
+    uint32_t attrDefIndex,
+    uint32_t attrValue,
+    CMsgSOSingleObject &update)
+{
+    auto it = m_items.find(itemId);
+    if (it == m_items.end())
+    {
+        // The client can ask to change an attribute of an item it does not own (a stale
+        // preview, or the charm tool itself). Those are not ours to persist.
+        return false;
+    }
+
+    CSOEconItem &item = it->second;
+    CSOEconItemAttribute *attribute = FindOrAddAttribute(item, attrDefIndex);
+
+    if (!attribute)
+    {
+        assert(false);
+        return false;
+    }
+
+    // CMsgModifyItemAttribute carries a single uint32. For the float attributes (the keychain
+    // slot offsets) that value is the raw IEEE float the client already has, so copy the bits
+    // rather than converting the integer: an offset of 1.0f arrives as 0x3F800000 and would
+    // otherwise be stored as 1065353216.
+    if (m_itemSchema.IsFloatAttribute(attrDefIndex))
+    {
+        float value = 0.0f;
+        static_assert(sizeof(value) == sizeof(attrValue), "float must be 32 bit");
+        memcpy(&value, &attrValue, sizeof(value));
+        m_itemSchema.SetAttributeFloat(attribute, value);
+    }
+    else
+    {
+        m_itemSchema.SetAttributeUint32(attribute, attrValue);
+    }
+
+    ToSingleObject(update, item);
+    WriteToFile();
+    return true;
+}
+
 static bool IsEquippedMusicKitItem(const CSOEconItem &item)
 {
     // Music kits live in the shared no-team loadout.

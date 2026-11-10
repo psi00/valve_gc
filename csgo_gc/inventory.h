@@ -92,6 +92,15 @@ public:
     uint32_t EquippedMusicKitMVPCount(bool incrementForLocalMVP) const;
     bool IncrementKillCountAttribute(uint64_t itemId, uint32_t amount, CMsgSOSingleObject &update);
 
+    // CS2 charms ("keychains") are stored one attribute at a time through
+    // CMsgModifyItemAttribute: 299 = slot 0 keychain id, 300..302 = slot 0 offsets,
+    // 306 = slot 0 seed, 314 = highlight, 321 = sticker. Returns false when the item
+    // is not ours, which lets the caller drop the request instead of persisting it.
+    bool ModifyItemAttribute(uint64_t itemId,
+        uint32_t attrDefIndex,
+        uint32_t attrValue,
+        CMsgSOSingleObject &update);
+
     bool NameItem(uint64_t nameTagId,
         uint64_t itemId,
         std::string_view name,

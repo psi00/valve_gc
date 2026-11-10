@@ -39,6 +39,9 @@ public:
     explicit KeyValue(std::string_view name);
 
     bool ParseFromFile(const char *path);
+
+    // parses KeyValues text that is already in memory (e.g. extracted from a VPK)
+    bool ParseFromString(std::string_view data);
     bool WriteToFile(const char *path);
 
     void BinaryWriteToString(std::string &buffer);

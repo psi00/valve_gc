@@ -1,5 +1,6 @@
 #include "stdafx.h"
 #include "item_schema.h"
+#include "vpk.h"
 #include "config.h"
 #include "keyvalue.h"
 #include "random.h"
@@ -109,6 +110,36 @@ uint32_t LootListItem::CaseRarity() const
     return rarity;
 }
 
+// CS2 ships csgo/scripts/items/items_game.txt inside pak01_*.vpk.  Extract it
+// once and cache it next to inventory.txt so later starts skip the archive read.
+static bool ExtractItemsGameFromVpk(std::string &out)
+{
+    const std::string indexPath = Vpk::FindIndex();
+    if (indexPath.empty())
+    {
+        return false;
+    }
+
+    std::vector<uint8_t> bytes;
+    if (!Vpk::ExtractFile(indexPath, "scripts/items/items_game.txt", bytes) || bytes.empty())
+    {
+        Platform::Print("csgo_gc: items_game.txt not present in %s\n", indexPath.c_str());
+        return false;
+    }
+
+    const std::string cachePath = Vpk::GameDir() + "csgo_gc/items_game.txt";
+    if (FILE *cache = fopen(cachePath.c_str(), "wb"))
+    {
+        fwrite(bytes.data(), 1, bytes.size(), cache);
+        fclose(cache);
+        Platform::Print("csgo_gc: extracted items_game.txt from %s to %s (%zu bytes)\n",
+            indexPath.c_str(), cachePath.c_str(), bytes.size());
+    }
+
+    out.assign(reinterpret_cast<const char *>(bytes.data()), bytes.size());
+    return true;
+}
+
 ItemSchema::ItemSchema()
 {
     // Seed known attribute types so skin/sticker/music attributes work even when
@@ -141,6 +172,9 @@ ItemSchema::ItemSchema()
         { 300, AttributeType::Float }, // keychain slot 0 offset x
         { 301, AttributeType::Float }, // keychain slot 0 offset y
         { 302, AttributeType::Float }, // keychain slot 0 offset z
+        { 306, AttributeType::Uint32 }, // keychain slot 0 seed
+        { 314, AttributeType::Uint32 }, // keychain slot 0 highlight reel
+        { 321, AttributeType::Uint32 }, // keychain slot 0 sticker
         { 137, AttributeType::Uint32 }, // tournament event id
         { 138, AttributeType::Uint32 }, // tournament event stage id
         { 139, AttributeType::Uint32 }, // tournament team 0 id
@@ -161,9 +195,20 @@ ItemSchema::ItemSchema()
         !itemSchema.ParseFromFile("../../csgo_gc/items_game.txt") &&
         !itemSchema.ParseFromFile("csgo_gc/items_game.txt"))
     {
-        Platform::Print("csgo_gc: items_game.txt not found, using hardcoded attribute types only "
-                        "(extract it from pak01_*.vpk to csgo_gc/items_game.txt)\n");
-        return;
+        // CS2 has no loose copy: the schema lives inside pak01_*.vpk.
+        std::string extracted;
+        if (!ExtractItemsGameFromVpk(extracted))
+        {
+            Platform::Print("csgo_gc: items_game.txt not found (no loose file and no readable "
+                            "pak01_dir.vpk), using hardcoded attribute types only\n");
+            return;
+        }
+
+        if (!itemSchema.ParseFromString(extracted))
+        {
+            Platform::Print("csgo_gc: failed to parse items_game.txt extracted from the VPK\n");
+            return;
+        }
     }
 
     const KeyValue *itemsGame = itemSchema.GetSubkey("items_game");
@@ -226,8 +271,9 @@ ItemSchema::ItemSchema()
         }
         else
         {
-            // no knives sorry
-            assert(false);
+            // unusual (knife/glove) drops need this list; CS2 keeps them in the
+            // VPK schema, so a stock install simply never rolls an unusual
+            Platform::Print("csgo_gc: unusual_loot_lists.txt not found, unusual drops disabled\n");
         }
     }
 
@@ -398,6 +444,12 @@ bool ItemSchema::SetAttributeUint32(CSOEconItemAttribute *attribute, uint32_t va
     }
 
     return true;
+}
+
+bool ItemSchema::IsFloatAttribute(uint32_t defIndex) const
+{
+    auto it = m_attributeInfo.find(defIndex);
+    return it != m_attributeInfo.end() && it->second.m_type == AttributeType::Float;
 }
 
 bool ItemSchema::SetAttributeString(CSOEconItemAttribute *attribute, std::string_view value) const
@@ -1193,7 +1245,8 @@ ItemInfo *ItemSchema::ItemInfoByName(std::string_view name)
         }
     }
 
-    assert(false);
+    // A current schema references items this parser does not build (new item
+    // classes, prefab-only entries); treat those as unresolvable, not fatal.
     return nullptr;
 }
 

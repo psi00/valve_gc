@@ -130,6 +130,9 @@ public:
     bool SetAttributeUint32(CSOEconItemAttribute *attribute, uint32_t value) const;
     bool SetAttributeString(CSOEconItemAttribute *attribute, std::string_view value) const;
 
+    // true when the attribute is stored as an IEEE float (e.g. the keychain slot offsets)
+    bool IsFloatAttribute(uint32_t defIndex) const;
+
     // for case opening
     const LootList *GetCrateLootList(uint32_t crateDefIndex) const;
 
@@ -270,6 +273,11 @@ public:
         AttributeKeychainSlot0OffsetX = 300,
         AttributeKeychainSlot0OffsetY = 301,
         AttributeKeychainSlot0OffsetZ = 302,
+        // The client needs the per-slot seed to resolve the charm material; without
+        // it the inventory preview waits for the keychain attributes forever.
+        AttributeKeychainSlot0Seed = 306,
+        AttributeKeychainSlot0Highlight = 314,
+        AttributeKeychainSlot0Sticker = 321,
 
         AttributeTournamentEventId = 137,
         AttributeTournamentEventStageId = 138,

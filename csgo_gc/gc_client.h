@@ -67,6 +67,7 @@ private:
     // Increment the equipped StatTrak music kit when the local player receives round MVP.
     void LocalPlayerRoundMVP();
     void ApplySticker(GCMessageRead &messageRead);
+    void ModifyItemAttribute(GCMessageRead &messageRead);
     void StoreGetUserData(GCMessageRead &messageRead);
     void StorePurchaseInit(GCMessageRead &messageRead);
     void StorePurchaseFinalize(GCMessageRead &messageRead);

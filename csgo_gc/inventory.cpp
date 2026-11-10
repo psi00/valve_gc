@@ -6,6 +6,10 @@
 #include "keyvalue.h"
 #include "platform.h"
 #include "random.h"
+#include <cerrno>
+#include <cmath>
+#include <cstdlib>
+#include <limits>
 #include <set>
 
 constexpr const char *InventoryFilePath = "../../csgo_gc/inventory.txt";
@@ -152,6 +156,23 @@ static uint32_t StickerScaleAttribute(size_t slot)
 static uint32_t StickerRotationAttribute(size_t slot)
 {
     return ItemSchema::AttributeStickerRotation0 + static_cast<uint32_t>(slot) * 4;
+}
+
+// Placement attributes use their own bases: two floats per slot for the offset deltas, one
+// uint per slot for the physical anchor index. The 113 + slot * 4 block above is unrelated.
+static uint32_t StickerOffsetXAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerOffsetX0 + static_cast<uint32_t>(slot) * 2;
+}
+
+static uint32_t StickerOffsetYAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerOffsetY0 + static_cast<uint32_t>(slot) * 2;
+}
+
+static uint32_t StickerSchemaAttribute(size_t slot)
+{
+    return ItemSchema::AttributeStickerSchema0 + static_cast<uint32_t>(slot);
 }
 
 CSOEconItem &Inventory::AllocateItem(uint32_t highItemId)
@@ -1225,6 +1246,76 @@ bool Inventory::ModifyItemAttribute(uint64_t itemId,
     return true;
 }
 
+bool Inventory::SetItemAttribute(uint64_t itemId,
+    uint32_t attrDefIndex,
+    std::string_view value,
+    CMsgSOSingleObject &update)
+{
+    auto it = m_items.find(itemId);
+    if (it == m_items.end())
+    {
+        // Same policy as ModifyItemAttribute: only our own items are editable.
+        return false;
+    }
+
+    // Resolve the type before touching the item. An id the schema does not know has no type,
+    // and the SetAttribute* helpers assert instead of storing anything.
+    std::optional<AttributeType> type = m_itemSchema.GetAttributeType(attrDefIndex);
+    if (!type)
+    {
+        return false;
+    }
+
+    CSOEconItem &item = it->second;
+
+    // Parse before writing so a rejected value cannot leave a half-written attribute behind.
+    std::string input{ value };
+    if (input.empty())
+    {
+        return false;
+    }
+
+    char *end = nullptr;
+    errno = 0;
+
+    if (*type == AttributeType::Float)
+    {
+        float parsed = std::strtof(input.c_str(), &end);
+        if (errno == ERANGE || end != input.c_str() + input.size() || !std::isfinite(parsed))
+        {
+            return false;
+        }
+
+        // Charm coordinates and sticker deltas live on a 0.0001 grid; rounding here keeps RCON
+        // edits indistinguishable from values the client sends after a drag.
+        parsed = std::round(parsed * 10000.0f) / 10000.0f;
+        m_itemSchema.SetAttributeFloat(FindOrAddAttribute(item, attrDefIndex), parsed);
+    }
+    else if (*type == AttributeType::Uint32)
+    {
+        // strtoull accepts a leading minus and wraps it, so reject signs before converting, and
+        // range-check the result: uint32 attributes are 32 bit even where long is 64 bit.
+        unsigned long long parsed = std::strtoull(input.c_str(), &end, 10);
+        if (errno == ERANGE || end != input.c_str() + input.size() || input[0] == '-'
+            || parsed > std::numeric_limits<uint32_t>::max())
+        {
+            return false;
+        }
+
+        m_itemSchema.SetAttributeUint32(FindOrAddAttribute(item, attrDefIndex),
+            static_cast<uint32_t>(parsed));
+    }
+    else
+    {
+        m_itemSchema.SetAttributeString(FindOrAddAttribute(item, attrDefIndex), value);
+    }
+
+    ToSingleObject(update, item);
+    // An RCON edit is a real change, not a transient grant: persist it or it is lost on exit.
+    WriteToFile();
+    return true;
+}
+
 static bool IsEquippedMusicKitItem(const CSOEconItem &item)
 {
     // Music kits live in the shared no-team loadout.
@@ -1895,17 +1986,24 @@ uint64_t Inventory::CreateRconItem(uint32_t defIndex,
         CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKeychainSlot0Id);
         m_itemSchema.SetAttributeUint32(attribute, *options.keychain);
 
-        // The client expects the slot offsets alongside the id; zero uses the
-        // weapon's default charm anchor.
-        const std::pair<ItemSchema::Attribute, float> offsets[] = {
-            { ItemSchema::AttributeKeychainSlot0OffsetX, 0.0f },
-            { ItemSchema::AttributeKeychainSlot0OffsetY, 0.0f },
-            { ItemSchema::AttributeKeychainSlot0OffsetZ, 0.0f },
+        if (options.keychainSeed)
+        {
+            attribute = FindOrAddAttribute(*item, ItemSchema::AttributeKeychainSlot0Seed);
+            m_itemSchema.SetAttributeUint32(attribute, *options.keychainSeed);
+        }
+
+        // The positions are absolute model-space coordinates, not deltas, and the client
+        // expects the whole set alongside the id (an omitted member leaves the charm
+        // unanchored). Zero means the weapon's default charm anchor.
+        const std::pair<uint32_t, std::optional<float>> offsets[] = {
+            { ItemSchema::AttributeKeychainSlot0OffsetX, options.keychainOffsetX },
+            { ItemSchema::AttributeKeychainSlot0OffsetY, options.keychainOffsetY },
+            { ItemSchema::AttributeKeychainSlot0OffsetZ, options.keychainOffsetZ },
         };
         for (const auto &offset : offsets)
         {
             attribute = FindOrAddAttribute(*item, offset.first);
-            m_itemSchema.SetAttributeFloat(attribute, offset.second);
+            m_itemSchema.SetAttributeFloat(attribute, offset.second.value_or(0.0f));
         }
     }
 
@@ -1935,6 +2033,26 @@ uint64_t Inventory::CreateRconItem(uint32_t defIndex,
         {
             CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerRotationAttribute(i));
             m_itemSchema.SetAttributeFloat(attribute, *options.stickerRotation[i]);
+        }
+
+        // Placement: only written when supplied, like wear/scale/rotation above. The client
+        // falls back to the sticker's default anchor when these are absent.
+        if (options.stickerOffsetX[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerOffsetXAttribute(i));
+            m_itemSchema.SetAttributeFloat(attribute, *options.stickerOffsetX[i]);
+        }
+
+        if (options.stickerOffsetY[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerOffsetYAttribute(i));
+            m_itemSchema.SetAttributeFloat(attribute, *options.stickerOffsetY[i]);
+        }
+
+        if (options.stickerSchema[i])
+        {
+            CSOEconItemAttribute *attribute = FindOrAddAttribute(*item, StickerSchemaAttribute(i));
+            m_itemSchema.SetAttributeUint32(attribute, *options.stickerSchema[i]);
         }
     }
 

@@ -168,6 +168,18 @@ ItemSchema::ItemSchema()
         { 168, AttributeType::Uint32 }, // quest id
         { 232, AttributeType::Uint32 }, // sprays remaining
         { 233, AttributeType::Uint32 }, // spray tint id
+        // sticker placement: 278..289 are the per-slot offset deltas (two floats per slot),
+        // 290..295 the per-slot anchor index. Without these, SetAttributeFloat asserts and
+        // writes nothing whenever items_game.txt could not be loaded.
+        { 278, AttributeType::Float  }, { 279, AttributeType::Float  },
+        { 280, AttributeType::Float  }, { 281, AttributeType::Float  },
+        { 282, AttributeType::Float  }, { 283, AttributeType::Float  },
+        { 284, AttributeType::Float  }, { 285, AttributeType::Float  },
+        { 286, AttributeType::Float  }, { 287, AttributeType::Float  },
+        { 288, AttributeType::Float  }, { 289, AttributeType::Float  },
+        { 290, AttributeType::Uint32 }, { 291, AttributeType::Uint32 },
+        { 292, AttributeType::Uint32 }, { 293, AttributeType::Uint32 },
+        { 294, AttributeType::Uint32 }, { 295, AttributeType::Uint32 },
         { 299, AttributeType::Uint32 }, // keychain slot 0 id
         { 300, AttributeType::Float }, // keychain slot 0 offset x
         { 301, AttributeType::Float }, // keychain slot 0 offset y
@@ -450,6 +462,17 @@ bool ItemSchema::IsFloatAttribute(uint32_t defIndex) const
 {
     auto it = m_attributeInfo.find(defIndex);
     return it != m_attributeInfo.end() && it->second.m_type == AttributeType::Float;
+}
+
+std::optional<AttributeType> ItemSchema::GetAttributeType(uint32_t defIndex) const
+{
+    auto it = m_attributeInfo.find(defIndex);
+    if (it == m_attributeInfo.end())
+    {
+        return {};
+    }
+
+    return it->second.m_type;
 }
 
 bool ItemSchema::SetAttributeString(CSOEconItemAttribute *attribute, std::string_view value) const

@@ -16,6 +16,7 @@ add_library(csgo_gc SHARED
     main.cpp
     networking_client.cpp
     networking_server.cpp
+    rcon_placement.cpp
     rcon_server.cpp
     steam_hook.cpp
     vpk.cpp)
@@ -116,6 +117,7 @@ if (BUILD_TESTING)
         inventory_rcon_tests.cpp
         item_schema.cpp
         keyvalue.cpp
+        rcon_placement.cpp
         vpk.cpp)
 
     target_precompile_headers(inventory_rcon_tests PRIVATE stdafx.h)

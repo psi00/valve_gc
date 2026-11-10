@@ -133,6 +133,10 @@ public:
     // true when the attribute is stored as an IEEE float (e.g. the keychain slot offsets)
     bool IsFloatAttribute(uint32_t defIndex) const;
 
+    // storage type of an attribute id, empty when the id is unknown to the schema and the
+    // hardcoded fallback table. SetAttribute{Float,Uint32,String} assert without one.
+    std::optional<AttributeType> GetAttributeType(uint32_t defIndex) const;
+
     // for case opening
     const LootList *GetCrateLootList(uint32_t crateDefIndex) const;
 
@@ -267,6 +271,16 @@ public:
 
         AttributeSpraysRemaining = 232,
         AttributeSprayTintId = 233,
+
+        // CS2 sticker placement, six slots each. The offset is a small delta from the
+        // weapon's physical anchor (278 + slot * 2 = x, 279 + slot * 2 = y) and the
+        // anchor ("schema") index is 290 + slot. Do not reuse the 113 + slot * 4 helper
+        // above: these have a different base and stride.
+        AttributeStickerOffsetX0 = 278,
+        AttributeStickerOffsetY0 = 279,
+        // 278..289: six slots, two floats each (stride 2)
+        AttributeStickerSchema0 = 290,
+        // 290..295: six slots (stride 1)
 
         // CS2 charm attachment. The id names a keychain definition, not a def_index.
         AttributeKeychainSlot0Id = 299,

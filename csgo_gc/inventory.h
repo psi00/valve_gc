@@ -36,6 +36,11 @@ public:
         std::optional<uint32_t> statTrak;
         std::optional<uint32_t> music;
         std::optional<uint32_t> keychain;
+        // absolute model-space charm position and the optional dangle seed (1..100000)
+        std::optional<float> keychainOffsetX;
+        std::optional<float> keychainOffsetY;
+        std::optional<float> keychainOffsetZ;
+        std::optional<uint32_t> keychainSeed;
         std::optional<uint32_t> sprayColor;
         std::optional<uint32_t> sprayRemaining;
         TournamentOptions tournament;
@@ -44,6 +49,10 @@ public:
         std::array<std::optional<float>, 6> stickerWear;
         std::array<std::optional<float>, 6> stickerScale;
         std::array<std::optional<float>, 6> stickerRotation;
+        // small deltas from the sticker's physical anchor, and the anchor index itself
+        std::array<std::optional<float>, 6> stickerOffsetX;
+        std::array<std::optional<float>, 6> stickerOffsetY;
+        std::array<std::optional<uint32_t>, 6> stickerSchema;
     };
 
     void BuildCacheSubscription(CMsgSOCacheSubscribed &message, int level, bool server);
@@ -99,6 +108,15 @@ public:
     bool ModifyItemAttribute(uint64_t itemId,
         uint32_t attrDefIndex,
         uint32_t attrValue,
+        CMsgSOSingleObject &update);
+
+    // RCON-side counterpart of ModifyItemAttribute: sets one attribute on an existing item,
+    // parsing `value` according to the attribute's schema type (so floats take decimals)
+    // and persisting the result like a client-side edit does. Returns false when the item is
+    // not ours or the attribute/value cannot be resolved.
+    bool SetItemAttribute(uint64_t itemId,
+        uint32_t attrDefIndex,
+        std::string_view value,
         CMsgSOSingleObject &update);
 
     bool NameItem(uint64_t nameTagId,

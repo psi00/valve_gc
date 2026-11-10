@@ -4,6 +4,7 @@
 #include "graffiti.h"
 #include "keyvalue.h"
 #include "networking_shared.h"
+#include "rcon_placement.h"
 
 #include <cerrno>
 #include <chrono>
@@ -464,6 +465,7 @@ const ClientGC::RconCommandDef *ClientGC::RconCommands(size_t &count)
         { "remove_item", "remove_item <itemid>", &ClientGC::RconRemoveItem },
         { "refresh_inventory", "refresh_inventory", &ClientGC::RconRefreshInventory },
         { "save_inventory", "save_inventory", &ClientGC::RconSaveInventory },
+        { "set_item_attr", "set_item_attr <itemid> <attrdef> <value>", &ClientGC::RconSetItemAttr },
     };
 
     count = sizeof(Commands) / sizeof(Commands[0]);
@@ -749,6 +751,39 @@ std::string ClientGC::RconGiveItem(const RconRequest &request)
             return {};
         };
 
+        // Charm/sticker positions: finite, on the 0.0001 grid, and within a loose absolute
+        // cap that catches typos without rejecting long-weapon coordinates. See
+        // rcon_placement.h for the shared rules.
+        auto parsePlacementFloat = [&](std::optional<float> &target) -> std::optional<std::string> {
+            float parsed;
+            if (!RconPlacement::ParseOffset(value, parsed))
+            {
+                return InvalidParameter(key);
+            }
+            target = parsed;
+            return {};
+        };
+
+        auto parseKeychainSeed = [&](std::optional<uint32_t> &target) -> std::optional<std::string> {
+            uint32_t parsed;
+            if (!RconPlacement::ParseSeed(value, parsed))
+            {
+                return InvalidParameter(key);
+            }
+            target = parsed;
+            return {};
+        };
+
+        auto parseStickerSchema = [&](std::optional<uint32_t> &target) -> std::optional<std::string> {
+            uint32_t parsed;
+            if (!RconPlacement::ParseStickerSchema(value, parsed))
+            {
+                return InvalidParameter(key);
+            }
+            target = parsed;
+            return {};
+        };
+
         std::optional<std::string> error;
         if (key == "level")
         {
@@ -798,6 +833,22 @@ std::string ClientGC::RconGiveItem(const RconRequest &request)
         {
             error = parseUint32(options.keychain);
         }
+        else if (key == "keychain_x")
+        {
+            error = parsePlacementFloat(options.keychainOffsetX);
+        }
+        else if (key == "keychain_y")
+        {
+            error = parsePlacementFloat(options.keychainOffsetY);
+        }
+        else if (key == "keychain_z")
+        {
+            error = parsePlacementFloat(options.keychainOffsetZ);
+        }
+        else if (key == "keychain_seed")
+        {
+            error = parseKeychainSeed(options.keychainSeed);
+        }
         else if (key == "spray_color")
         {
             error = parseUint32(options.sprayColor);
@@ -845,6 +896,18 @@ std::string ClientGC::RconGiveItem(const RconRequest &request)
             else if (suffix == "_rotation")
             {
                 error = parseFloat(options.stickerRotation[stickerSlot]);
+            }
+            else if (suffix == "_x")
+            {
+                error = parsePlacementFloat(options.stickerOffsetX[stickerSlot]);
+            }
+            else if (suffix == "_y")
+            {
+                error = parsePlacementFloat(options.stickerOffsetY[stickerSlot]);
+            }
+            else if (suffix == "_schema")
+            {
+                error = parseStickerSchema(options.stickerSchema[stickerSlot]);
             }
             else
             {
@@ -952,6 +1015,60 @@ std::string ClientGC::RconSaveInventory(const RconRequest &request)
     }
 
     return m_inventory.Save() ? "OK saved" : "ERR save failed";
+}
+
+// Charm and sticker repositioning for an existing item. give_item can only place a charm when
+// it creates the item, so this is the piece that lets RCON move one afterwards: the client
+// accepts the attribute update immediately, no restart and no inventory.txt editing.
+std::string ClientGC::RconSetItemAttr(const RconRequest &request)
+{
+    constexpr const char *SetItemAttrUsage = "set_item_attr <itemid> <attrdef> <value>";
+
+    if (request.args.size() != 3)
+    {
+        return Usage(SetItemAttrUsage);
+    }
+
+    uint64_t itemId;
+    uint32_t attrDefIndex;
+    if (!TryParseNumber(request.args[0], itemId) || !TryParseNumber(request.args[1], attrDefIndex))
+    {
+        return Usage(SetItemAttrUsage);
+    }
+
+    if (!m_inventory.GetItem(itemId))
+    {
+        return "ERR item not found";
+    }
+
+    // Reject unknown attribute ids instead of writing a value no one can interpret, and apply
+    // the same rounding and caps as give_item.
+    std::string coerced;
+    switch (RconPlacement::CoerceAttributeValue(
+        m_inventory.GetItemSchema(), attrDefIndex, request.args[2], coerced))
+    {
+    case RconPlacement::AttributeValueStatus::UnknownAttribute:
+        return "ERR invalid attribute";
+
+    case RconPlacement::AttributeValueStatus::InvalidValue:
+        return "ERR invalid value";
+
+    case RconPlacement::AttributeValueStatus::Ok:
+        break;
+    }
+
+    CMsgSOSingleObject update;
+    if (!m_inventory.SetItemAttribute(itemId, attrDefIndex, coerced, update))
+    {
+        return "ERR invalid value";
+    }
+
+    // Push the item so the client re-renders the charm or sticker without a restart.
+    SendMessageToGame(true, k_ESOMsg_Update, update);
+
+    std::ostringstream response;
+    response << "OK item_id=" << itemId << " attr=" << attrDefIndex << " value=" << coerced;
+    return response.str();
 }
 
 void ClientGC::RefreshCachedMusicKitMVPs()
@@ -1967,6 +2084,18 @@ void ClientGC::ModifyItemAttribute(GCMessageRead &messageRead)
         return;
     }
 
+    SendMessageToGame(true, k_ESOMsg_Update, update);
+
+    // Sticker placement is stored through this same message, so only answer charm attributes
+    // with a keychain notification. Replying ApplyKeychain to a sticker edit runs the charm
+    // animation for something the client already knows about.
+    if (!RconPlacement::IsKeychainAttribute(message.attr_defidx()))
+    {
+        Platform::Print("ModifyItemAttribute: attr %u is not a charm attribute, no notification\n",
+            message.attr_defidx());
+        return;
+    }
+
     CMsgGCItemCustomizationNotification notification;
     notification.add_item_id(message.item_id());
     // Clearing the keychain id is how the client removes a charm; every other attribute value
@@ -1980,7 +2109,6 @@ void ClientGC::ModifyItemAttribute(GCMessageRead &messageRead)
         notification.set_request(k_EGCItemCustomizationNotification_ApplyKeychain);
     }
 
-    SendMessageToGame(true, k_ESOMsg_Update, update);
     SendMessageToGame(false, k_EMsgGCItemCustomizationNotification, notification, messageRead.JobId());
 }
 

@@ -51,6 +51,7 @@ private:
     std::string RconRemoveItem(const RconRequest &request);
     std::string RconRefreshInventory(const RconRequest &request);
     std::string RconSaveInventory(const RconRequest &request);
+    std::string RconSetItemAttr(const RconRequest &request);
 
     // send to the local game and the game server we're connected to (if we're connected)
     void SendMessageToGame(bool sendToGameServer, uint32_t type,

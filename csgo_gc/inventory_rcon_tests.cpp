@@ -1,6 +1,7 @@
 #include "stdafx.h"
 #include "config.h"
 #include "inventory.h"
+#include "rcon_placement.h"
 #include "test_filesystem.h"
 
 #include <cstdarg>
@@ -89,6 +90,12 @@ bool CheckParameterizedItem(const Inventory &inventory, uint64_t itemId)
     const CSOEconItemAttribute *stickerRotation = FindAttribute(*item, ItemSchema::AttributeStickerRotation0);
     const CSOEconItemAttribute *keychainId = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0Id);
     const CSOEconItemAttribute *keychainX = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0OffsetX);
+    const CSOEconItemAttribute *keychainY = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0OffsetY);
+    const CSOEconItemAttribute *keychainZ = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0OffsetZ);
+    const CSOEconItemAttribute *keychainSeed = FindAttribute(*item, ItemSchema::AttributeKeychainSlot0Seed);
+    const CSOEconItemAttribute *stickerOffsetX = FindAttribute(*item, ItemSchema::AttributeStickerOffsetX0);
+    const CSOEconItemAttribute *stickerOffsetY = FindAttribute(*item, ItemSchema::AttributeStickerOffsetY0);
+    const CSOEconItemAttribute *stickerSchema = FindAttribute(*item, ItemSchema::AttributeStickerSchema0);
 
     success &= music && schema.AttributeUint32(music) == 3;
     success &= killEater && schema.AttributeUint32(killEater) == 5;
@@ -102,7 +109,156 @@ bool CheckParameterizedItem(const Inventory &inventory, uint64_t itemId)
     success &= stickerScale && FloatNear(schema.AttributeFloat(stickerScale), 1.5f);
     success &= stickerRotation && FloatNear(schema.AttributeFloat(stickerRotation), 30.0f);
     success &= keychainId && schema.AttributeUint32(keychainId) == 42;
-    success &= keychainX && FloatNear(schema.AttributeFloat(keychainX), 0.0f);
+    // charm positions are absolute model-space coordinates, not deltas
+    success &= keychainX && FloatNear(schema.AttributeFloat(keychainX), 6.6343f);
+    success &= keychainY && FloatNear(schema.AttributeFloat(keychainY), 0.7039f);
+    success &= keychainZ && FloatNear(schema.AttributeFloat(keychainZ), 2.475f);
+    success &= keychainSeed && schema.AttributeUint32(keychainSeed) == 12345;
+    // sticker placement: small deltas from the slot's physical anchor plus the anchor index
+    success &= stickerOffsetX && FloatNear(schema.AttributeFloat(stickerOffsetX), 0.02f);
+    success &= stickerOffsetY && FloatNear(schema.AttributeFloat(stickerOffsetY), -0.01f);
+    success &= stickerSchema && schema.AttributeUint32(stickerSchema) == 2;
+
+    return success;
+}
+
+bool CheckAttributeTypeTable(const ItemSchema &schema)
+{
+    // Every id declared in ItemSchema::Attribute has to resolve to a storage type: without one
+    // SetAttributeFloat/SetAttributeUint32 assert and store nothing, and the tests run without
+    // items_game.txt so the hardcoded fallback table is what answers here.
+    std::vector<uint32_t> ids = {
+        ItemSchema::AttributeTexturePrefab,
+        ItemSchema::AttributeTextureSeed,
+        ItemSchema::AttributeTextureWear,
+        ItemSchema::AttributeKillEater,
+        ItemSchema::AttributeKillEaterScoreType,
+        ItemSchema::AttributeCustomName,
+        ItemSchema::AttributeMusicId,
+        ItemSchema::AttributeQuestId,
+        ItemSchema::AttributeSpraysRemaining,
+        ItemSchema::AttributeSprayTintId,
+        ItemSchema::AttributeKeychainSlot0Id,
+        ItemSchema::AttributeKeychainSlot0OffsetX,
+        ItemSchema::AttributeKeychainSlot0OffsetY,
+        ItemSchema::AttributeKeychainSlot0OffsetZ,
+        ItemSchema::AttributeKeychainSlot0Seed,
+        ItemSchema::AttributeKeychainSlot0Highlight,
+        ItemSchema::AttributeKeychainSlot0Sticker,
+        ItemSchema::AttributeTournamentEventId,
+        ItemSchema::AttributeTournamentEventStageId,
+        ItemSchema::AttributeTournamentTeam0Id,
+        ItemSchema::AttributeTournamentTeam1Id,
+        ItemSchema::AttributeTournamentMvpAccountId,
+        ItemSchema::AttributeCasketItemsCount,
+        ItemSchema::AttributeCasketModificationDate,
+        ItemSchema::AttributeCasketIdLow,
+        ItemSchema::AttributeCasketIdHigh,
+    };
+
+    // 113..136: sticker id/wear/scale/rotation, four attributes per slot
+    for (uint32_t id = ItemSchema::AttributeStickerId0; id <= ItemSchema::AttributeStickerRotation5; id++)
+    {
+        ids.push_back(id);
+    }
+
+    // 278..289: six slots of offset x/y deltas; 290..295: six slot anchor indexes
+    for (uint32_t id = ItemSchema::AttributeStickerOffsetX0; id <= ItemSchema::AttributeStickerOffsetY0 + 11; id++)
+    {
+        ids.push_back(id);
+    }
+
+    for (uint32_t id = ItemSchema::AttributeStickerSchema0; id <= ItemSchema::AttributeStickerSchema0 + 5; id++)
+    {
+        ids.push_back(id);
+    }
+
+    bool success = true;
+    for (uint32_t id : ids)
+    {
+        if (!schema.GetAttributeType(id))
+        {
+            fprintf(stderr, "attribute %u has no storage type\n", id);
+            success = false;
+        }
+    }
+
+    // unknown ids stay unknown instead of defaulting to a type (both are unused in the shipped
+    // items_game.txt as well, so the check holds with and without the schema)
+    success &= !schema.GetAttributeType(65535);
+    success &= !schema.GetAttributeType(0xFFFF'FFF0u);
+    success &= schema.IsFloatAttribute(ItemSchema::AttributeStickerOffsetX0);
+    success &= !schema.IsFloatAttribute(ItemSchema::AttributeStickerSchema0);
+    return success;
+}
+
+bool CheckPlacementValidation(const ItemSchema &schema)
+{
+    // give_item and set_item_attr share these rules (rcon_placement.cpp). The client owns the
+    // per-weapon bounds, so all the GC rejects is nonsense: non-finite values, values off the
+    // 0.0001 grid, out-of-range seeds, and a sticker anchor above the last slot.
+    bool success = true;
+
+    float offset = 0.0f;
+    success &= RconPlacement::ParseOffset("6.63430", offset) && FloatNear(offset, 6.6343f);
+    success &= RconPlacement::ParseOffset("-11.0706", offset) && FloatNear(offset, -11.0706f);
+    success &= RconPlacement::ParseOffset("0.00006", offset) && FloatNear(offset, 0.0001f);
+    success &= !RconPlacement::ParseOffset("nan", offset);
+    success &= !RconPlacement::ParseOffset("inf", offset);
+    success &= !RconPlacement::ParseOffset("", offset);
+    success &= !RconPlacement::ParseOffset("1.5x", offset);
+    success &= !RconPlacement::ParseOffset("5000", offset);
+
+    uint32_t seed = 0;
+    success &= RconPlacement::ParseSeed("1", seed) && seed == 1;
+    success &= RconPlacement::ParseSeed("100000", seed) && seed == 100000;
+    success &= !RconPlacement::ParseSeed("0", seed);
+    success &= !RconPlacement::ParseSeed("100001", seed);
+    success &= !RconPlacement::ParseSeed("-5", seed);
+
+    uint32_t stickerSchema = 0;
+    success &= RconPlacement::ParseStickerSchema("0", stickerSchema) && stickerSchema == 0;
+    success &= RconPlacement::ParseStickerSchema("5", stickerSchema) && stickerSchema == 5;
+    success &= !RconPlacement::ParseStickerSchema("6", stickerSchema);
+    success &= !RconPlacement::ParseStickerSchema("-1", stickerSchema);
+
+    // set_item_attr parses through the attribute's schema type, not as raw bits
+    std::string coerced;
+    success &= RconPlacement::CoerceAttributeValue(schema, 65535, "1", coerced)
+        == RconPlacement::AttributeValueStatus::UnknownAttribute;
+
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeKeychainSlot0OffsetX, "7.5", coerced)
+        == RconPlacement::AttributeValueStatus::Ok;
+    success &= coerced == "7.5000";
+
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeStickerOffsetY0, "-0.01", coerced)
+        == RconPlacement::AttributeValueStatus::Ok;
+    success &= coerced == "-0.0100";
+
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeStickerSchema0, "2", coerced)
+        == RconPlacement::AttributeValueStatus::Ok;
+    success &= coerced == "2";
+
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeCustomName, "renamed", coerced)
+        == RconPlacement::AttributeValueStatus::Ok;
+    success &= coerced == "renamed";
+
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeKeychainSlot0OffsetX, "nan", coerced)
+        == RconPlacement::AttributeValueStatus::InvalidValue;
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeKeychainSlot0OffsetX, "5000", coerced)
+        == RconPlacement::AttributeValueStatus::InvalidValue;
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeKeychainSlot0Seed, "0", coerced)
+        == RconPlacement::AttributeValueStatus::InvalidValue;
+    success &= RconPlacement::CoerceAttributeValue(
+        schema, ItemSchema::AttributeStickerSchema0, "9", coerced)
+        == RconPlacement::AttributeValueStatus::InvalidValue;
 
     return success;
 }
@@ -141,6 +297,8 @@ bool RunTests()
             success &= inventory.GetItemSchema().GetCrateLootList(4745) != nullptr;
         }
         success &= inventory.ItemCount() == 0;
+        success &= CheckAttributeTypeTable(inventory.GetItemSchema());
+        success &= CheckPlacementValidation(inventory.GetItemSchema());
 
         Inventory::ParameterizedItemOptions options;
         options.paint = 1352;
@@ -163,6 +321,10 @@ bool RunTests()
         fullOptions.music = 3;
         fullOptions.statTrak = 5;
         fullOptions.keychain = 42;
+        fullOptions.keychainOffsetX = 6.6343f;
+        fullOptions.keychainOffsetY = 0.7039f;
+        fullOptions.keychainOffsetZ = 2.475f;
+        fullOptions.keychainSeed = 12345;
         fullOptions.sprayColor = 7;
         fullOptions.sprayRemaining = 11;
         fullOptions.tournament.eventId = 42;
@@ -171,6 +333,9 @@ bool RunTests()
         fullOptions.stickerWear[0] = 0.1f;
         fullOptions.stickerScale[0] = 1.5f;
         fullOptions.stickerRotation[0] = 30.0f;
+        fullOptions.stickerOffsetX[0] = 0.02f;
+        fullOptions.stickerOffsetY[0] = -0.01f;
+        fullOptions.stickerSchema[0] = 2;
 
         CMsgSOSingleObject musicUpdate;
         uint64_t musicItemId = inventory.CreateRconItem(ItemSchema::ItemMusicKit, fullOptions, musicUpdate, error);
@@ -215,6 +380,44 @@ bool RunTests()
             success &= !inventory.ModifyItemAttribute(0xDEAD, 299, 1, keychainUpdate);
         }
 
+        // SetItemAttribute is the RCON-side counterpart of ModifyItemAttribute: it parses the
+        // value as a string according to the schema type and persists the result, which is how
+        // gc-editor repositions a charm on an item that already exists.
+        {
+            CMsgSOSingleObject attributeUpdate;
+            success &= inventory.SetItemAttribute(itemId,
+                ItemSchema::AttributeKeychainSlot0OffsetX, "7.5", attributeUpdate);
+            const CSOEconItemAttribute *editedX = FindAttribute(
+                inventory.Items().at(itemId), ItemSchema::AttributeKeychainSlot0OffsetX);
+            success &= editedX
+                && FloatNear(inventory.GetItemSchema().AttributeFloat(editedX), 7.5f);
+
+            // floats are rounded onto the 0.0001 grid
+            success &= inventory.SetItemAttribute(itemId,
+                ItemSchema::AttributeKeychainSlot0OffsetY, "0.12345678", attributeUpdate);
+            const CSOEconItemAttribute *editedY = FindAttribute(
+                inventory.Items().at(itemId), ItemSchema::AttributeKeychainSlot0OffsetY);
+            success &= editedY
+                && FloatNear(inventory.GetItemSchema().AttributeFloat(editedY), 0.1235f);
+
+            // unknown items and unknown attribute ids are rejected, not invented
+            success &= !inventory.SetItemAttribute(0xDEAD,
+                ItemSchema::AttributeKeychainSlot0OffsetX, "1.5", attributeUpdate);
+            success &= !inventory.SetItemAttribute(itemId, 65535, "1", attributeUpdate);
+            success &= FindAttribute(inventory.Items().at(itemId), 65535) == nullptr;
+
+            // garbage is rejected and leaves the stored value alone
+            success &= !inventory.SetItemAttribute(itemId,
+                ItemSchema::AttributeKeychainSlot0OffsetX, "nan", attributeUpdate);
+            success &= !inventory.SetItemAttribute(itemId,
+                ItemSchema::AttributeKeychainSlot0OffsetX, "1.5x", attributeUpdate);
+            success &= !inventory.SetItemAttribute(itemId,
+                ItemSchema::AttributeKeychainSlot0OffsetX, "", attributeUpdate);
+            editedX = FindAttribute(inventory.Items().at(itemId), ItemSchema::AttributeKeychainSlot0OffsetX);
+            success &= editedX
+                && FloatNear(inventory.GetItemSchema().AttributeFloat(editedX), 7.5f);
+        }
+
         // validation still applies to values that do not depend on the schema
         CMsgSOSingleObject invalidUpdate;
         Inventory::ParameterizedItemOptions invalidOptions;
@@ -245,6 +448,20 @@ bool RunTests()
             success &= CheckBasicItem(reloaded, first->first) || CheckBasicItem(reloaded, second->first);
             success &= CheckParameterizedItem(reloaded, first->first)
                 || CheckParameterizedItem(reloaded, second->first);
+
+            // an RCON edit has to survive save/reload, or it vanishes on GC shutdown
+            bool sawEditedOffset = false;
+            for (const auto &pair : items)
+            {
+                const CSOEconItemAttribute *editedX = FindAttribute(
+                    pair.second, ItemSchema::AttributeKeychainSlot0OffsetX);
+                if (editedX
+                    && FloatNear(reloaded.GetItemSchema().AttributeFloat(editedX), 7.5f))
+                {
+                    sawEditedOffset = true;
+                }
+            }
+            success &= sawEditedOffset;
         }
     }
 

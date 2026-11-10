@@ -400,23 +400,54 @@ An empty password accepts any password, so keep `bind_address` on loopback unles
 
 - `rcon_server.{h,cpp}` — listener, framing, auth, per-connection threads. Lives outside the GC;
   it forwards commands through `ClientGC::RunRconCommand`.
+- `rcon_placement.{h,cpp}` — the charm/sticker placement rules shared by `give_item` and
+  `set_item_attr` (rounding, seed/schema ranges, the loose offset cap). Separated from
+  `gc_client.cpp` so they are testable without a live GC.
 - `RconServer::RegisterClient` / `UnregisterClient` are called from
   `SteamGameCoordinatorProxy` in `steam_hook.cpp`; `Start()` runs during client GC init.
 - Commands arrive on a socket thread, so they are posted to the GC thread as
   `GCEvent::RconCommand` and the socket thread waits on a `std::promise` (5 s timeout).
 - Commands: `ping`, `status`, `clients`, `help`, `list_items [limit]`, `find_item <...>`,
   `item_info <itemid>`, `give_item <defindex> [count] [key=value...]`, `remove_item <itemid>`,
-  `refresh_inventory`, `save_inventory`.
+  `refresh_inventory`, `save_inventory`, `set_item_attr <itemid> <attrdef> <value>`.
 - `give_item` keys: `level`, `quality`, `rarity`, `name`, `paint`, `seed`, `wear`, `stattrak`,
-  `music`, `keychain`, `spray_color`, `spray_remaining`, `tournament_{event,stage,team0,team1,mvp}`,
-  `sticker0..5` with `_wear`/`_scale`/`_rotation`. `keychain` takes a CS2 keychain id (1-78, a
-  keychain definition, not a `def_index`) and writes attributes 299-302; gloves take no charm.
+  `music`, `keychain`, `keychain_x`/`keychain_y`/`keychain_z`, `keychain_seed`, `spray_color`,
+  `spray_remaining`, `tournament_{event,stage,team0,team1,mvp}`, `sticker0..5` with
+  `_wear`/`_scale`/`_rotation`/`_x`/`_y`/`_schema`.
+- Charms: `keychain` takes a CS2 keychain id (1-78, a keychain definition, not a `def_index`).
+  `keychain_x`/`_y`/`_z` are **absolute model-space coordinates** (not deltas) and
+  `keychain_seed` is the dangle seed (1-100000). Together they write attributes 299 (id),
+  300/301/302 (position), 306 (seed); the whole offset set is always written because the client
+  expects it. Gloves take no charm.
+- Sticker placement: `sticker<N>_x`/`_y` are small **deltas** from the slot's physical anchor
+  and `sticker<N>_schema` is that anchor's index (`0..5`). They write `278 + slot*2` (x),
+  `279 + slot*2` (y) and `290 + slot`, alongside the existing `113 + slot*4` id, `+1` wear,
+  `+2` scale, `+3` rotation.
+- Placement values are rounded onto a `0.0001` grid and rotations are degrees. The valid
+  envelope is per weapon model and lives in client model data, not in `items_game.txt`, so the
+  GC only rejects non-finite values, out-of-range seeds, `sticker<N>_schema > 5`, and a loose
+  `|offset| > 1000` typo guard; the client owns the real bounds and clamping.
+- Tags: `_x`/`_y`/`_z`/`_schema` accept decimals/ids only; unknown keys still return
+  `ERR unknown parameter <key>`.
+- `set_item_attr` moves a charm or sticker on an item that already exists (what `give_item`
+  cannot do), parses `value` according to the attribute's schema type, applies the same
+  rounding and caps, persists to `inventory.txt` and pushes `k_ESOMsg_Update` so the client
+  re-renders without a restart. Replies `OK item_id=<id> attr=<id> value=<string>`, or
+  `ERR item not found` / `ERR invalid attribute` / `ERR invalid value`. Example:
+  `set_item_attr 12345 300 7.5` sets charm X. Unlike `give_item`, this is an edit, so it is
+  persisted immediately.
+- `ModifyItemAttribute` (the client's own charm drag path) only answers charm attributes
+  (299-321) with an `ApplyKeychain`/`RemoveKeychain` notification; sticker placement travels
+  through the same message and gets no keychain notification.
 - `give_item`/`remove_item` do not persist immediately; the inventory is also written when the
   object is destroyed, but run `save_inventory` to be sure.
 - Without `items_game.txt`, `give_item` skips id/rarity validation and creates a raw item from
   the supplied def index; pass `quality=`/`rarity=` explicitly, since paint-kit rarity cannot be
   derived.
-- Tests: `ctest -R rcon` runs `rcon_server_tests` (listener-failure and loopback auth/ping/status).
+- Tests: `ctest -R rcon` runs `rcon_server_tests` (listener-failure and loopback auth/ping/status)
+  and `inventory_rcon_tests`, which covers charm/sticker placement creation, `set_item_attr`,
+  the save/reload round trip, and the attribute-type table (every `ItemSchema::Attribute` id has
+  a type even without `items_game.txt`).
 
 ---
 
@@ -573,7 +604,7 @@ Windows uses Win32 + PE walking; Unix uses `dlopen`/`dlsym` and Mach-O (macOS) o
 | Entry / hooks | `main.cpp`, `steam_hook.cpp`, `launcher/` |
 | GC core | `gc_shared.*`, `gc_client.*`, `gc_server.*`, `gc_message.*`, `gc_const*.h` |
 | Inventory / schema | `inventory.*`, `item_schema.*`, `case_opening.*`, `graffiti.*`, `keyvalue.*`, `config.*`, `game_profile.*`, `random.h` |
-| RCON | `rcon_server.{h,cpp}`, `rcon_server_tests.cpp`, `test_filesystem.h` |
+| RCON | `rcon_server.{h,cpp}`, `rcon_placement.{h,cpp}`, `rcon_server_tests.cpp`, `test_filesystem.h` |
 | Networking | `networking_client.*`, `networking_server.*`, `networking_shared.h` |
 | Platform | `platform.h`, `platform_windows.cpp`, `platform_unix.cpp`, `appid.cpp` |
 | Protobuf | `protobufs/*.proto`, `protobufs/*.pb.{h,cc}` |
